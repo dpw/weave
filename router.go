@@ -52,6 +52,7 @@ func (router *Router) Start() {
 	router.ConnectionMaker = StartConnectionMaker(router)
 	router.Topology = StartTopology(router)
 	router.UDPListener = router.listenUDP(Port, po)
+	router.DFUDPConn = router.makeDFUDPConn()
 	router.listenTCP(Port)
 	router.sniff(pio)
 }
@@ -188,6 +189,7 @@ func (router *Router) udpReader(conn *net.UDPConn, po PacketSink) {
 		} else if n < NameSize {
 			continue // TODO something different?
 		} else {
+			sender.Port = 6783
 			name := PeerNameFromBin(buf[:NameSize])
 			packet := make([]byte, n-NameSize)
 			copy(packet, buf[NameSize:n])
@@ -288,4 +290,21 @@ func (router *Router) handleUDPPacketFunc(dec *EthernetDecoder, po PacketSink) F
 
 		return nil
 	}
+}
+
+func (router *Router) makeDFUDPConn() *net.UDPConn {
+	localAddr, err := net.ResolveUDPAddr("udp4", ":0")
+	checkFatal(err)
+	conn, err := net.ListenUDP("udp4", localAddr)
+	checkFatal(err)
+	f, err := conn.File()
+	defer f.Close()
+	checkFatal(err)
+	fd := int(f.Fd())
+	// This one makes sure all packets we send out do have DF set
+	// on them.
+	err = syscall.SetsockoptInt(fd, syscall.IPPROTO_IP,
+		syscall.IP_MTU_DISCOVER, syscall.IP_PMTUDISC_DO)
+	checkFatal(err)
+	return conn
 }

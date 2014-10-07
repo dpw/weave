@@ -4,7 +4,6 @@ import (
 	"code.google.com/p/gopacket"
 	"code.google.com/p/gopacket/layers"
 	"log"
-	"net"
 	"syscall"
 	"time"
 )
@@ -14,10 +13,8 @@ func (conn *LocalConnection) ensureForwarders() error {
 		return nil
 	}
 	udpSender := NewSimpleUDPSender(conn)
-	udpSenderDF, err := NewRawUDPSender(conn) // only thing that can error, so do it early
-	if err != nil {
-		return err
-	}
+	udpSenderDF := NewDFUDPSender(conn)
+	// XXX can't return error any more
 
 	usingPassword := conn.SessionKey != nil
 	var encryptor, encryptorDF Encryptor
@@ -348,96 +345,33 @@ func (sender *SimpleUDPSender) Shutdown() error {
 	return nil
 }
 
-func NewRawUDPSender(conn *LocalConnection) (*RawUDPSender, error) {
-	ipSocket, err := dialIP(conn)
-	if err != nil {
-		return nil, err
-	}
-	udpHeader := &layers.UDP{SrcPort: layers.UDPPort(Port)}
-	ipBuf := gopacket.NewSerializeBuffer()
-	opts := gopacket.SerializeOptions{
-		FixLengths: true,
-		// UDP header is calculated with a phantom IP
-		// header. Yes, it's totally nuts. Thankfully, for UDP
-		// over IPv4, the checksum is optional. It's not
-		// optional for IPv6, but we'll ignore that for
-		// now. TODO
-		ComputeChecksums: false}
-
-	return &RawUDPSender{
-		ipBuf:     ipBuf,
-		opts:      opts,
-		udpHeader: udpHeader,
-		socket:    ipSocket,
-		conn:      conn}, nil
+func NewDFUDPSender(conn *LocalConnection) *DFUDPSender {
+	return &DFUDPSender{udpConn: conn.Router.DFUDPConn, conn: conn}
 }
 
-func (sender *RawUDPSender) Send(msg []byte) error {
-	payload := gopacket.Payload(msg)
-	sender.udpHeader.DstPort = layers.UDPPort(sender.conn.RemoteUDPAddr().Port)
+func (sender *DFUDPSender) Send(msg []byte) error {
+	_, err := sender.udpConn.WriteToUDP(msg, sender.conn.RemoteUDPAddr())
+        if err == nil || PosixError(err) != syscall.EMSGSIZE {
+                return err
+        }
 
-	err := gopacket.SerializeLayers(sender.ipBuf, sender.opts, sender.udpHeader, &payload)
-	if err != nil {
-		return err
-	}
-	packet := sender.ipBuf.Bytes()
-	_, err = sender.socket.Write(packet)
-	if err == nil || PosixError(err) != syscall.EMSGSIZE {
-		return err
-	}
-	f, err := sender.socket.File()
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	fd := int(f.Fd())
-	log.Println("EMSGSIZE on send, expecting PMTU update (IP packet was",
-		len(packet), "bytes, payload was", len(msg), "bytes)")
-	pmtu, err := syscall.GetsockoptInt(fd, syscall.IPPROTO_IP, syscall.IP_MTU)
-	if err != nil {
-		return err
-	}
-	return MsgTooBigError{PMTU: pmtu}
+	f, err := sender.conn.TCPConn.File()
+        if err != nil {
+                return err
+        }
+        defer f.Close()
+
+	log.Println("EMSGSIZE on send, expecting PMTU update (payload was ",
+		len(msg), " bytes)")
+	pmtu, err := syscall.GetsockoptInt(int(f.Fd()), syscall.IPPROTO_IP,
+		syscall.IP_MTU)
+        if err != nil {
+                return err
+        }
+
+        return MsgTooBigError{PMTU: pmtu}
 }
 
-func (sender *RawUDPSender) Shutdown() error {
-	defer func() { sender.socket = nil }()
-	return sender.socket.Close()
-}
-
-func dialIP(conn *LocalConnection) (*net.IPConn, error) {
-	ipLocalAddr, err := ipAddr(conn.TCPConn.LocalAddr())
-	if err != nil {
-		return nil, err
-	}
-	ipRemoteAddr, err := ipAddr(conn.TCPConn.RemoteAddr())
-	if err != nil {
-		return nil, err
-	}
-	ipSocket, err := net.DialIP("ip4:UDP", ipLocalAddr, ipRemoteAddr)
-	if err != nil {
-		return nil, err
-	}
-	f, err := ipSocket.File()
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	fd := int(f.Fd())
-	// This Makes sure all packets we send out have DF set on them.
-	err = syscall.SetsockoptInt(fd, syscall.IPPROTO_IP, syscall.IP_MTU_DISCOVER, syscall.IP_PMTUDISC_DO)
-	if err != nil {
-		return nil, err
-	}
-	return ipSocket, nil
-}
-
-func ipAddr(addr net.Addr) (*net.IPAddr, error) {
-	host, _, err := net.SplitHostPort(addr.String())
-	if err != nil {
-		return nil, err
-	}
-	return &net.IPAddr{
-		IP:   net.ParseIP(host),
-		Zone: ""}, nil
+func (sender *DFUDPSender) Shutdown() error {
+	return nil
 }

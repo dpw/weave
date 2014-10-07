@@ -18,6 +18,7 @@ type Router struct {
 	Macs               *MacCache
 	Peers              *PeerCache
 	UDPListener        *net.UDPConn
+	DFUDPConn          *net.UDPConn
 	Topology           *Topology
 	ConnectionMaker    *ConnectionMaker
 	Password           *[]byte
@@ -186,12 +187,9 @@ type SimpleUDPSender struct {
 	udpConn *net.UDPConn
 }
 
-type RawUDPSender struct {
-	ipBuf     gopacket.SerializeBuffer
-	opts      gopacket.SerializeOptions
-	udpHeader *layers.UDP
-	socket    *net.IPConn
-	conn      *LocalConnection
+type DFUDPSender struct {
+	conn    *LocalConnection
+	udpConn *net.UDPConn
 }
 
 // TCPSender interface and implementations
