@@ -38,8 +38,14 @@ $(WEAVER_EXE) $(WEAVEDNS_EXE): common/*.go
 $(WEAVER_EXE): router/*.go weaver/main.go
 $(WEAVEDNS_EXE): nameserver/*.go weavedns/main.go
 
+build_weavetools_exes_in_container=yes
+
 $(WEAVETOOLS_EXES): tools/build.sh
+ifdef build_weavetools_exes_in_container
 	$(SUDO) docker run --rm -v $(realpath $(<D)):/home/weave ubuntu sh /home/weave/build.sh
+else
+	sh $<
+endif
 
 $(WEAVER_EXPORT): weaver/Dockerfile $(WEAVER_EXE)
 	$(SUDO) docker build -t $(WEAVER_IMAGE) weaver
