@@ -65,6 +65,16 @@ Then to actually build, do:
 $ docker run -v /var/run/docker.sock:/var/run/docker.sock zettio/weave-build
 ```
 
+This will clone the weave git repository, then do the build.  If you
+want to build weave from a forked repository or a branch other than
+master, you can do it by overriding the WEAVE_REPO and WEAVE_BRANCH
+container environment variables with the `-e` option to `docker run`,
+e.g:
+
+```bash
+$ docker run -e WEAVE_REPO=<repo URI> -e WEAVE_BRANCH=<branch name> /var/run/docker.sock:/var/run/docker.sock weave-build
+```
+
 Note the `-v` option to give the container access to the Docker daemon
 on the host.  When the build completes, the resulting images are
 stored in docker on the host, as when building directly under
@@ -77,14 +87,6 @@ mode, it will block attempts to access `/var/run/docker.sock` inside
 the container.  See
 [dpw/selinux-dockersock](https://github.com/dpw/selinux-dockersock)
 for a way to work around this problem.
-
-If you want to build weave from a forked repo or a branch other than
-master, you can do it by overriding the WEAVE_REPO and WEAVE_BRANCH
-container environment variables with the `-e` option to `docker run`, e.g:
-
-```bash
-$ docker run -e WEAVE_REPO=<repo URI> -e WEAVE_BRANCH=<branch name> /var/run/docker.sock:/var/run/docker.sock weave-build
-```
 
 ## Building using Vagrant
 
