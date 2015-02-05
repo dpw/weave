@@ -72,7 +72,7 @@ container environment variables with the `-e` option to `docker run`,
 e.g:
 
 ```bash
-$ docker run -e WEAVE_REPO=<repo URI> -e WEAVE_BRANCH=<branch name> /var/run/docker.sock:/var/run/docker.sock weave-build
+$ docker run -e WEAVE_REPO=<repo URI> -e WEAVE_BRANCH=<branch name> /var/run/docker.sock:/var/run/docker.sock zettio/weave-build
 ```
 
 Note the `-v` option to give the container access to the Docker daemon
