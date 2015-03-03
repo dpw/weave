@@ -90,7 +90,7 @@ func (conn *LocalConnection) Forward(df bool, frame *ForwardedFrame, dec *Ethern
 		forwardChan   = conn.forwardChan
 		forwardChanDF = conn.forwardChanDF
 		effectivePMTU = conn.effectivePMTU
-		stackFrag     = conn.stackFrag
+		stackFrag     = conn.stackFrag && !conn.Router.NoStackFrag
 	)
 	conn.RUnlock()
 

@@ -31,6 +31,7 @@ type Router struct {
 	ConnLimit       int
 	BufSz           int
 	LogFrame        func(string, []byte, *layers.Ethernet)
+	NoStackFrag     bool
 }
 
 type PacketSource interface {
@@ -46,13 +47,14 @@ type PacketSourceSink interface {
 	PacketSink
 }
 
-func NewRouter(iface *net.Interface, name PeerName, nickName string, password []byte, connLimit int, bufSz int, logFrame func(string, []byte, *layers.Ethernet)) *Router {
+func NewRouter(iface *net.Interface, name PeerName, nickName string, password []byte, connLimit int, bufSz int, logFrame func(string, []byte, *layers.Ethernet), noStackFrag bool) *Router {
 	router := &Router{
 		Iface:          iface,
 		GossipChannels: make(map[uint32]*GossipChannel),
 		ConnLimit:      connLimit,
 		BufSz:          bufSz,
-		LogFrame:       logFrame}
+		LogFrame:       logFrame,
+		NoStackFrag:    noStackFrag}
 	if len(password) > 0 {
 		router.Password = &password
 	}
@@ -94,7 +96,7 @@ func (router *Router) UsingPassword() bool {
 
 func (router *Router) Status() string {
 	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintln("Our name is", router.Ourself.Name, "(" + router.Ourself.NickName + ")"))
+	buf.WriteString(fmt.Sprintln("Our name is", router.Ourself.Name, "("+router.Ourself.NickName+")"))
 	buf.WriteString(fmt.Sprintln("Sniffing traffic on", router.Iface))
 	buf.WriteString(fmt.Sprintf("MACs:\n%s", router.Macs))
 	buf.WriteString(fmt.Sprintf("Peers:\n%s", router.Peers))

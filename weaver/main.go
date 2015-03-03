@@ -45,6 +45,7 @@ func main() {
 		peers       []string
 		connLimit   int
 		bufSz       int
+		noStackFrag bool
 	)
 
 	flag.BoolVar(&justVersion, "version", false, "print version and exit")
@@ -57,6 +58,7 @@ func main() {
 	flag.StringVar(&prof, "profile", "", "enable profiling and write profiles to given path")
 	flag.IntVar(&connLimit, "connlimit", 10, "connection limit (defaults to 10, set to 0 for unlimited)")
 	flag.IntVar(&bufSz, "bufsz", 8, "capture buffer size in MB (defaults to 8MB)")
+	flag.BoolVar(&noStackFrag, "nostackfrag", false, "don't rely on the network to deliver IP fragments correctly")
 	flag.Parse()
 	peers = flag.Args()
 
@@ -130,7 +132,7 @@ func main() {
 		defer profile.Start(&p).Stop()
 	}
 
-	router := weave.NewRouter(iface, ourName, nickName, []byte(password), connLimit, bufSz*1024*1024, logFrame)
+	router := weave.NewRouter(iface, ourName, nickName, []byte(password), connLimit, bufSz*1024*1024, logFrame, noStackFrag)
 	log.Println("Our name is", router.Ourself.Name, "("+router.Ourself.NickName+")")
 	router.Start()
 	for _, peer := range peers {
