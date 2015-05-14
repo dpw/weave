@@ -56,7 +56,7 @@ type Allocator struct {
 	pendingAllocates   []operation                // held until we get some free space
 	pendingClaims      []operation                // held until we know who owns the space
 	gossip             router.Gossip              // our link to the outside world for sending messages
-	paxos              paxos.Node
+	paxos              *paxos.Node
 	paxosTicker        *time.Ticker
 	shuttingDown       bool // to avoid doing any requests while trying to shut down
 	now                func() time.Time
@@ -86,10 +86,11 @@ func NewAllocator(ourName router.PeerName, ourUID router.PeerUID, subnetCIDR str
 		// per RFC 1122, don't allocate the first and last address in the subnet
 		ring:               ring.New(address.Add(subnetStart, 1), address.Add(subnetStart, subnetSize-1), ourName),
 		owned:              make(map[string]address.Address),
+		paxos:              paxos.NewNode(ourName, ourUID, quorum),
+		owned:              make(map[string]address.Address),
 		otherPeerNicknames: make(map[router.PeerName]string),
 		now:                time.Now,
 	}
-	alloc.paxos.Init(ourName, ourUID, quorum)
 	return alloc, nil
 }
 
@@ -503,9 +504,14 @@ func (alloc *Allocator) createRing(peers []router.PeerName) {
 }
 
 func (alloc *Allocator) ringUpdated() {
-	if alloc.paxosTicker != nil {
-		alloc.paxosTicker.Stop()
-		alloc.paxosTicker = nil
+	// When we have a ring, we don't need paxos any more
+	if alloc.paxos != nil {
+		alloc.paxos = nil
+
+		if alloc.paxosTicker != nil {
+			alloc.paxosTicker.Stop()
+			alloc.paxosTicker = nil
+		}
 	}
 
 	alloc.space.UpdateRanges(alloc.ring.OwnedRanges())
