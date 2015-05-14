@@ -19,7 +19,7 @@ import (
 // Ring represents the ring itself
 type Ring struct {
 	Start, End address.Address // [min, max) tokens in this ring.  Due to wrapping, min == max (effectively)
-	Peername   router.PeerName // name of peer owning this ring instance
+	Peer       router.PeerName // name of peer owning this ring instance
 	Entries    entries         // list of entries sorted by token
 }
 
@@ -87,7 +87,7 @@ func (r *Ring) checkInvariants() error {
 func New(start, end address.Address, peer router.PeerName) *Ring {
 	common.Assert(start < end)
 
-	ring := &Ring{Start: start, End: end, Peername: peer, Entries: make([]*entry, 0)}
+	ring := &Ring{Start: start, End: end, Peer: peer, Entries: make([]*entry, 0)}
 	ring.updateExportedVariables()
 	return ring
 }
@@ -97,7 +97,7 @@ func New(start, end address.Address, peer router.PeerName) *Ring {
 func (r *Ring) TotalRemoteFree() address.Offset {
 	result := address.Offset(0)
 	for _, entry := range r.Entries {
-		if entry.Peer != r.Peername {
+		if entry.Peer != r.Peer {
 			result += entry.Free
 		}
 	}
@@ -120,7 +120,7 @@ func (r *Ring) distance(start, end address.Address) address.Offset {
 // - start < end
 // - [start, end) must be owned by the calling peer
 func (r *Ring) GrantRangeToHost(start, end address.Address, peer router.PeerName) {
-	//fmt.Printf("%s GrantRangeToHost [%v,%v) -> %s\n", r.Peername, start, end, peer)
+	//fmt.Printf("%s GrantRangeToHost [%v,%v) -> %s\n", r.Peer, start, end, peer)
 
 	r.assertInvariants()
 	defer r.assertInvariants()
@@ -142,7 +142,7 @@ func (r *Ring) GrantRangeToHost(start, end address.Address, peer router.PeerName
 
 	// Check all tokens up to end are owned by us
 	for pos := preceedingPos; pos < len(r.Entries) && r.Entries.entry(pos).Token < end; pos++ {
-		common.Assert(r.Entries.entry(pos).Peer == r.Peername)
+		common.Assert(r.Entries.entry(pos).Peer == r.Peer)
 	}
 
 	// ----------------- End of Checks -----------------
@@ -160,7 +160,7 @@ func (r *Ring) GrantRangeToHost(start, end address.Address, peer router.PeerName
 		r.Entries.insert(entry{Token: start, Peer: peer, Free: startFree})
 		preceedingPos++
 		// Reset free space on previous entry, which we own.
-		previousEntry.update(r.Peername, r.distance(previousEntry.Token, start))
+		previousEntry.update(r.Peer, r.distance(previousEntry.Token, start))
 	}
 
 	// Give all intervening tokens to the other peer
@@ -183,7 +183,7 @@ func (r *Ring) GrantRangeToHost(start, end address.Address, peer router.PeerName
 
 	// If not, we need to insert a token such that we claim this bit on the end.
 	endFree := r.distance(end, r.Entries.entry(pos).Token)
-	r.Entries.insert(entry{Token: end, Peer: r.Peername, Free: endFree})
+	r.Entries.insert(entry{Token: end, Peer: r.Peer, Free: endFree})
 }
 
 // Merge the given ring into this ring and return any new ranges added
@@ -219,7 +219,7 @@ func (r *Ring) Merge(gossip Ring) error {
 			i++
 		case mine.Token > theirs.Token:
 			// insert, checking that a range owned by us hasn't been split
-			if previousOwner != nil && *previousOwner == r.Peername && theirs.Peer != r.Peername {
+			if previousOwner != nil && *previousOwner == r.Peer && theirs.Peer != r.Peer {
 				return ErrEntryInMyRange
 			}
 			addToResult(*theirs)
@@ -236,7 +236,7 @@ func (r *Ring) Merge(gossip Ring) error {
 				addToResult(*mine)
 				previousOwner = &mine.Peer
 			case mine.Version < theirs.Version:
-				if mine.Peer == r.Peername { // We shouldn't receive updates to our own tokens
+				if mine.Peer == r.Peer { // We shouldn't receive updates to our own tokens
 					return ErrNewerVersion
 				}
 				addToResult(*theirs)
@@ -257,7 +257,7 @@ func (r *Ring) Merge(gossip Ring) error {
 
 	for ; j < len(gossip.Entries); j++ {
 		theirs = gossip.Entries[j]
-		if previousOwner != nil && *previousOwner == r.Peername && theirs.Peer != r.Peername {
+		if previousOwner != nil && *previousOwner == r.Peer && theirs.Peer != r.Peer {
 			return ErrEntryInMyRange
 		}
 		addToResult(*theirs)
@@ -301,7 +301,7 @@ func (r *Ring) OwnedRanges() (result []address.Range) {
 	r.assertInvariants()
 
 	for i, entry := range r.Entries {
-		if entry.Peer == r.Peername {
+		if entry.Peer == r.Peer {
 			nextEntry := r.Entries.entry(i + 1)
 			result = append(result, address.Range{Start: entry.Token, End: nextEntry.Token})
 		}
@@ -343,7 +343,7 @@ func (r *Ring) ClaimForPeers(peers []router.PeerName) {
 }
 
 func (r *Ring) ClaimItAll() {
-	r.ClaimForPeers([]router.PeerName{r.Peername})
+	r.ClaimForPeers([]router.PeerName{r.Peer})
 }
 
 func (r *Ring) FprintWithNicknames(w io.Writer, m map[router.PeerName]string) {
@@ -393,7 +393,7 @@ func (r *Ring) ReportFree(freespace map[address.Address]address.Offset) {
 		})
 
 		// Are you trying to report free on space I don't own?
-		common.Assert(i < len(entries) && entries[i].Token == start && entries[i].Peer == r.Peername)
+		common.Assert(i < len(entries) && entries[i].Token == start && entries[i].Peer == r.Peer)
 
 		// Check we're not reporting more space than the range
 		entry, next := entries.entry(i), entries.entry(i+1)
@@ -425,7 +425,7 @@ func (r *Ring) ChoosePeerToAskForSpace() (result router.PeerName, err error) {
 		}
 
 		// Don't talk to yourself
-		if entry.Peer == r.Peername {
+		if entry.Peer == r.Peer {
 			continue
 		}
 
@@ -452,7 +452,7 @@ func (r *Ring) ChoosePeerToAskForSpace() (result router.PeerName, err error) {
 
 func (r *Ring) PickPeerForTransfer() router.PeerName {
 	for _, entry := range r.Entries {
-		if entry.Peer != r.Peername {
+		if entry.Peer != r.Peer {
 			return entry.Peer
 		}
 	}
