@@ -9,7 +9,7 @@ import (
 )
 
 type TestNode struct {
-	Node
+	*Node
 
 	// Topology
 	links    []*Link
@@ -96,7 +96,7 @@ func makeRandomModel(params *TestParams, r *rand.Rand, t *testing.T) *Model {
 	}
 
 	for i := range m.nodes {
-		m.nodes[i].Init(router.PeerName(i/2+1),
+		m.nodes[i].Node = NewNode(router.PeerName(i/2+1),
 			router.PeerUID(r.Int63()), m.quorum)
 		m.nodes[i].Propose()
 	}
@@ -171,8 +171,8 @@ func (m *Model) isolateNode(node *TestNode) {
 
 // Restart a node
 func (m *Model) restart(node *TestNode) {
-	node.Init(router.PeerName(m.nextID), router.PeerUID(m.r.Int63()),
-		m.quorum)
+	node.Node = NewNode(router.PeerName(m.nextID),
+		router.PeerUID(m.r.Int63()), m.quorum)
 	m.nextID++
 	node.Propose()
 

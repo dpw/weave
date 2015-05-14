@@ -73,10 +73,12 @@ type Node struct {
 	knows  GossipState
 }
 
-func (node *Node) Init(name router.PeerName, uid router.PeerUID, quorum uint) {
-	node.id = NodeID{name, uid}
-	node.quorum = quorum
-	node.knows = map[NodeID]NodeClaims{}
+func NewNode(name router.PeerName, uid router.PeerUID, quorum uint) *Node {
+	return &Node{
+		id:     NodeID{name, uid},
+		quorum: quorum,
+		knows:  map[NodeID]NodeClaims{},
+	}
 }
 
 func (node *Node) GossipState() GossipState {
