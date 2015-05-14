@@ -658,12 +658,12 @@ func TestFuzzRingHard(t *testing.T) {
 			size := address.Subtract(rangeToSplit.End, rangeToSplit.Start)
 			ipInRange := address.Add(rangeToSplit.Start, address.Offset(rand.Intn(int(size))))
 			_, peerToGiveTo, _ := randomPeer(-1)
-			common.Debug.Printf("%s: Granting [%v, %v) to %s", ring.Peername, ipInRange, rangeToSplit.End, peerToGiveTo)
+			common.Debug.Printf("%s: Granting [%v, %v) to %s", ring.Peer, ipInRange, rangeToSplit.End, peerToGiveTo)
 			ring.GrantRangeToHost(ipInRange, rangeToSplit.End, peerToGiveTo)
 
 			// Now 'gossip' this to a random host (note, note could be same host as above)
 			otherIndex, _, otherRing := randomPeer(-1)
-			common.Debug.Printf("%s: 'Gossiping' to %s", ring.Peername, otherRing.Peername)
+			common.Debug.Printf("%s: 'Gossiping' to %s", ring.Peer, otherRing.Peer)
 			wt.AssertSuccess(t, otherRing.Merge(*ring))
 
 			theRanges[indexWithRanges] = ring.OwnedRanges()
@@ -682,7 +682,7 @@ func TestFuzzRingHard(t *testing.T) {
 		}
 		ring1 := ringsWithEntries[rand.Intn(len(ringsWithEntries))]
 		ring2index, _, ring2 := randomPeer(-1)
-		common.Debug.Printf("%s: 'Gossiping' to %s", ring1.Peername, ring2.Peername)
+		common.Debug.Printf("%s: 'Gossiping' to %s", ring1.Peer, ring2.Peer)
 		wt.AssertSuccess(t, ring2.Merge(*ring1))
 		theRanges[ring2index] = ring2.OwnedRanges()
 	}
