@@ -508,3 +508,14 @@ func (r *Ring) Owner(token address.Address) router.PeerName {
 	entry := r.Entries.entry(preceedingEntry)
 	return entry.Peer
 }
+
+// Get the set of PeerNames mentioned in the ring
+func (r *Ring) PeerNames() map[router.PeerName]struct{} {
+	res := make(map[router.PeerName]struct{})
+
+	for _, entry := range r.Entries {
+		res[entry.Peer] = struct{}{}
+	}
+
+	return res
+}
