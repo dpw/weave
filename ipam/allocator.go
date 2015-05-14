@@ -44,26 +44,26 @@ type operation interface {
 // necessary plumbing.  Runs as a single-threaded Actor, so no locks
 // are used around data structures.
 type Allocator struct {
-	actionChan         chan<- func()
-	ourName            router.PeerName
-	subnetStart        address.Address            // start address of space all peers are allocating from
-	subnetSize         address.Offset             // length of space all peers are allocating from
-	prefixLen          int                        // network prefix length, e.g. 24 for a /24 network
-	ring               *ring.Ring                 // information on ranges owned by all peers
-	space              space.Space                // more detail on ranges owned by us
-	owned              map[string]address.Address // who owns what address, indexed by container-ID
-	otherPeerNicknames map[router.PeerName]string // so we can map nicknames for rmpeer
-	pendingAllocates   []operation                // held until we get some free space
-	pendingClaims      []operation                // held until we know who owns the space
-	gossip             router.Gossip              // our link to the outside world for sending messages
-	paxos              *paxos.Node
-	paxosTicker        *time.Ticker
-	shuttingDown       bool // to avoid doing any requests while trying to shut down
-	now                func() time.Time
+	actionChan       chan<- func()
+	ourName          router.PeerName
+	subnetStart      address.Address            // start address of space all peers are allocating from
+	subnetSize       address.Offset             // length of space all peers are allocating from
+	prefixLen        int                        // network prefix length, e.g. 24 for a /24 network
+	ring             *ring.Ring                 // information on ranges owned by all peers
+	space            space.Space                // more detail on ranges owned by us
+	owned            map[string]address.Address // who owns what address, indexed by container-ID
+	nicknames        map[router.PeerName]string // so we can map nicknames for rmpeer
+	pendingAllocates []operation                // held until we get some free space
+	pendingClaims    []operation                // held until we know who owns the space
+	gossip           router.Gossip              // our link to the outside world for sending messages
+	paxos            *paxos.Node
+	paxosTicker      *time.Ticker
+	shuttingDown     bool // to avoid doing any requests while trying to shut down
+	now              func() time.Time
 }
 
 // NewAllocator creates and initialises a new Allocator
-func NewAllocator(ourName router.PeerName, ourUID router.PeerUID, subnetCIDR string, quorum uint) (*Allocator, error) {
+func NewAllocator(ourName router.PeerName, ourUID router.PeerUID, ourNickname string, subnetCIDR string, quorum uint) (*Allocator, error) {
 	_, subnet, err := net.ParseCIDR(subnetCIDR)
 	if err != nil {
 		return nil, err
@@ -84,20 +84,13 @@ func NewAllocator(ourName router.PeerName, ourUID router.PeerUID, subnetCIDR str
 		subnetSize:  subnetSize,
 		prefixLen:   ones,
 		// per RFC 1122, don't allocate the first and last address in the subnet
-		ring:               ring.New(address.Add(subnetStart, 1), address.Add(subnetStart, subnetSize-1), ourName),
-		owned:              make(map[string]address.Address),
-		paxos:              paxos.NewNode(ourName, ourUID, quorum),
-		otherPeerNicknames: make(map[router.PeerName]string),
-		now:                time.Now,
+		ring:      ring.New(address.Add(subnetStart, 1), address.Add(subnetStart, subnetSize-1), ourName),
+		owned:     make(map[string]address.Address),
+		paxos:     paxos.NewNode(ourName, ourUID, quorum),
+		nicknames: map[router.PeerName]string{ourName: ourNickname},
+		now:       time.Now,
 	}
 	return alloc, nil
-}
-
-// OnNewPeer is called by router.Peers for every new peer found.
-func (alloc *Allocator) OnNewPeer(uid router.PeerName, nickname string) {
-	alloc.actionChan <- func() {
-		alloc.otherPeerNicknames[uid] = nickname
-	}
 }
 
 // Start runs the allocator goroutine
@@ -290,22 +283,10 @@ func (alloc *Allocator) Shutdown() {
 func (alloc *Allocator) AdminTakeoverRanges(peerNameOrNickname string) error {
 	resultChan := make(chan error)
 	alloc.actionChan <- func() {
-		peername, found := router.UnknownPeerName, false
-		for name, nickname := range alloc.otherPeerNicknames {
-			if nickname == peerNameOrNickname {
-				peername = name
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			var err error
-			peername, err = router.PeerNameFromString(peerNameOrNickname)
-			if err != nil {
-				resultChan <- fmt.Errorf("Cannot find peer '%s'", peerNameOrNickname)
-				return
-			}
+		peername, err := alloc.lookupPeername(peerNameOrNickname)
+		if err != nil {
+			resultChan <- fmt.Errorf("Cannot find peer '%s'", peerNameOrNickname)
+			return
 		}
 
 		alloc.debugln("AdminTakeoverRanges:", peername)
@@ -314,12 +295,36 @@ func (alloc *Allocator) AdminTakeoverRanges(peerNameOrNickname string) error {
 			return
 		}
 
-		delete(alloc.otherPeerNicknames, peername)
+		delete(alloc.nicknames, peername)
 		err, newRanges := alloc.ring.Transfer(peername, alloc.ourName)
 		alloc.space.AddRanges(newRanges)
 		resultChan <- err
 	}
 	return <-resultChan
+}
+
+// Lookup a PeerName by nickname or stringified PeerName.  We can't
+// call into the router for this because we are interested in peers
+// that have gone away but are still in the ring, which is why we
+// maintain our own nicknames map.
+func (alloc *Allocator) lookupPeername(name string) (router.PeerName, error) {
+	for peername, nickname := range alloc.nicknames {
+		if nickname == name {
+			return peername, nil
+		}
+	}
+
+	return router.PeerNameFromString(name)
+}
+
+// Restrict the peers in "nicknames" to those in the ring and our own
+func (alloc *Allocator) pruneNicknames() {
+	ringPeers := alloc.ring.PeerNames()
+	for name, _ := range alloc.nicknames {
+		if _, ok := ringPeers[name]; !ok && name != alloc.ourName {
+			delete(alloc.nicknames, name)
+		}
+	}
 }
 
 // OnGossipUnicast (Sync)
@@ -352,15 +357,19 @@ func (alloc *Allocator) OnGossipBroadcast(msg []byte) (router.GossipData, error)
 type gossipState struct {
 	// We send a timstamp along with the information to be
 	// gossipped in order to do detect skewed clocks
-	Now int64
+	Now       int64
+	Nicknames map[router.PeerName]string
 
 	Paxos paxos.GossipState
 	Ring  *ring.Ring
 }
 
 func (alloc *Allocator) encode() []byte {
-	var data gossipState
-	data.Now = alloc.now().Unix()
+	data := gossipState{
+		Now:       alloc.now().Unix(),
+		Nicknames: alloc.nicknames,
+	}
+
 	// We're only interested in Paxos until we have a Ring.
 	if alloc.ring.Empty() {
 		data.Paxos = alloc.paxos.GossipState()
@@ -458,7 +467,7 @@ func (alloc *Allocator) string() string {
 		fmt.Fprintf(&buf, "  Free IPs: ~%.1f%%, %d local, ~%d remote\n",
 			percentFree, localFreeSpace, remoteFreeSpace)
 
-		alloc.ring.FprintWithNicknames(&buf, alloc.otherPeerNicknames)
+		alloc.ring.FprintWithNicknames(&buf, alloc.nicknames)
 		fmt.Fprintf(&buf, alloc.space.String())
 		if len(alloc.pendingAllocates)+len(alloc.pendingClaims) > 0 {
 			fmt.Fprintf(&buf, "\nPending requests for ")
@@ -573,12 +582,18 @@ func (alloc *Allocator) update(msg []byte) error {
 		return fmt.Errorf("clock skew of %v detected, ignoring update", deltat)
 	}
 
+	// Merge nicknames
+	for peer, nickname := range data.Nicknames {
+		alloc.nicknames[peer] = nickname
+	}
+
 	// only one of Ring and Paxos should be present.  And we
 	// shouldn't get updates for a empty Ring. But tolerate
 	// them just in case.
 	if data.Ring != nil {
 		err = alloc.ring.Merge(*data.Ring)
 		if !alloc.ring.Empty() {
+			alloc.pruneNicknames()
 			alloc.ringUpdated()
 		}
 		return err

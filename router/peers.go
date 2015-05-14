@@ -13,7 +13,6 @@ type Peers struct {
 	ourself *Peer
 	table   map[PeerName]*Peer
 	onGC    func(*Peer)
-	onNew   func(*Peer)
 }
 
 type UnknownPeerError struct {
@@ -30,17 +29,7 @@ func NewPeers(ourself *Peer, onGC func(*Peer)) *Peers {
 	return &Peers{
 		ourself: ourself,
 		table:   make(map[PeerName]*Peer),
-		onGC:    onGC,
-		onNew:   func(*Peer) {}}
-}
-
-func (peers *Peers) SetNewPeerFunc(f func(*Peer)) {
-	peers.Lock()
-	defer peers.Unlock()
-	peers.onNew = f
-	for _, peer := range peers.table {
-		f(peer)
-	}
+		onGC:    onGC}
 }
 
 func (peers *Peers) FetchWithDefault(peer *Peer) *Peer {
@@ -57,7 +46,6 @@ func (peers *Peers) FetchWithDefault(peer *Peer) *Peer {
 		return res
 	}
 	peers.table[peer.Name] = peer
-	peers.onNew(peer)
 	peer.IncrementLocalRefCount()
 	return peer
 }
@@ -96,7 +84,6 @@ func (peers *Peers) ApplyUpdate(update []byte) (PeerNameSet, PeerNameSet, error)
 	// have no knowledge of. We can now apply the update. Start by
 	// adding in any new peers into the cache.
 	for name, newPeer := range newPeers {
-		peers.onNew(newPeer)
 		peers.table[name] = newPeer
 	}
 

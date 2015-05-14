@@ -119,8 +119,8 @@ func makeAllocator(name string, cidr string, quorum uint) *Allocator {
 		panic(err)
 	}
 
-	alloc, err := NewAllocator(peername, router.PeerUID(rand.Int63()), cidr,
-		quorum)
+	alloc, err := NewAllocator(peername, router.PeerUID(rand.Int63()),
+		"nick-"+name, cidr, quorum)
 	if err != nil {
 		panic(err)
 	}
