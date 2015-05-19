@@ -22,11 +22,8 @@ type mockChannelConnection struct {
 // for Routes and GossipSenders.
 func NewTestRouter(name string) *Router {
 	peerName, _ := PeerNameFromString(name)
-	router := NewRouter(Config{}, peerName, "")
-	// need to create a dummy channel otherwise tests hang on nil
-	// channels when the Router invoked ConnectionMaker.Refresh
-	router.ConnectionMaker.actionChan = make(chan ConnectionMakerAction, ChannelSize)
-	router.Routes.Start()
+	router := NewRouter(Config{}, peerName, "nick")
+	router.Start()
 	return router
 }
 
