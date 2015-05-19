@@ -84,6 +84,9 @@ func NewRouter(config Config, name PeerName, nickName string) *Router {
 	return router
 }
 
+// Start listening for packets from containers, TCP connections and
+// packets forwarded over UDP.  This is separate from NewRouter so
+// that gossipers can register before we start forming connections.
 func (router *Router) Start() {
 	// we need two pcap handles since they aren't thread-safe
 	var pio PacketSourceSink
