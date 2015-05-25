@@ -135,7 +135,6 @@ func (router *Router) handleCapturedPacket(frameData []byte, dec *EthernetDecode
 	if found && dstPeer == router.Ourself.Peer {
 		return
 	}
-	df := dec.DF()
 	router.LogFrame("Forwarding", frameData, dec)
 
 	// at this point we are handing over the frame to forwarders, so
@@ -148,11 +147,11 @@ func (router *Router) handleCapturedPacket(frameData []byte, dec *EthernetDecode
 	// If we don't know which peer corresponds to the dest MAC,
 	// broadcast it.
 	if !found {
-		router.Ourself.Broadcast(df, frameCopy, dec)
+		router.Ourself.Broadcast(frameCopy, dec)
 		return
 	}
 
-	err := router.Ourself.Forward(dstPeer, df, frameCopy, dec)
+	err := router.Ourself.Forward(dstPeer, frameCopy, dec)
 	if ftbe, ok := err.(FrameTooBigError); ok {
 		err = dec.sendICMPFragNeeded(ftbe.EPMTU, router.IntraHost.InjectPacket)
 	}
@@ -278,15 +277,13 @@ func (router *Router) handleUDPPacketFunc(relayConn *LocalConnection, dec *Ether
 			return
 		}
 
-		df := dec.DF()
-
 		if dstPeer != router.Ourself.Peer {
 			// it's not for us, we're just relaying it
 			router.LogFrame("Relaying", frame, dec)
-			err := router.Ourself.Relay(srcPeer, dstPeer, df, frame, dec)
+			err := router.Ourself.Relay(srcPeer, dstPeer, frame, dec)
 			if ftbe, ok := err.(FrameTooBigError); ok {
 				err = dec.sendICMPFragNeeded(ftbe.EPMTU, func(icmpFrame []byte) error {
-					return router.Ourself.Forward(srcPeer, false, icmpFrame, nil)
+					return router.Ourself.Forward(srcPeer, icmpFrame, nil)
 				})
 			}
 
@@ -307,7 +304,7 @@ func (router *Router) handleUDPPacketFunc(relayConn *LocalConnection, dec *Ether
 		dstPeer, found = router.Macs.Lookup(dstMac)
 		if !found || dstPeer != router.Ourself.Peer {
 			router.LogFrame("Relaying broadcast", frame, dec)
-			router.Ourself.RelayBroadcast(srcPeer, df, frame, dec)
+			router.Ourself.RelayBroadcast(srcPeer, frame, dec)
 		}
 	}
 }
