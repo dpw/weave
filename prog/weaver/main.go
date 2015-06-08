@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
 	"flag"
 	"fmt"
 	"log"
@@ -138,9 +137,14 @@ func main() {
 		defer profile.Start(&p).Stop()
 	}
 
-	config.InterHost = weave.NewSleeveInterHost(config.Port)
-	config.LogFrame = logFrameFunc(pktdebug)
 	config.PeerDiscovery = !noDiscovery
+	config.InterHost = weave.NewSleeveInterHost(config.Port)
+
+	if pktdebug {
+		config.PacketLogging = packetLogging{}
+	} else {
+		config.PacketLogging = nopPacketLogging{}
+	}
 
 	router := weave.NewRouter(config, name, nickName)
 	log.Println("Our name is", router.Ourself)
@@ -196,24 +200,22 @@ func options() map[string]string {
 	return options
 }
 
-func logFrameFunc(debug bool) weave.LogFrameFunc {
-	if !debug {
-		return func(prefix string, frame []byte, dec *weave.EthernetDecoder) {}
-	}
-	return func(prefix string, frame []byte, dec *weave.EthernetDecoder) {
-		h := fmt.Sprintf("%x", sha256.Sum256(frame))
-		parts := []interface{}{prefix, len(frame), "bytes (", h, ")"}
+type packetLogging struct{}
 
-		if dec != nil {
-			parts = append(parts, dec.Eth.SrcMAC, "->", dec.Eth.DstMAC)
+func (packetLogging) LogPacket(msg string, key weave.PacketKey) {
+	log.Println(msg, key.SrcMAC, "->", key.DstMAC)
+}
 
-			if dec.DF() {
-				parts = append(parts, "(DF)")
-			}
-		}
+func (packetLogging) LogForwardPacket(msg string, key weave.ForwardPacketKey) {
+	log.Println(msg, key.SrcPeer, key.SrcMAC, "->", key.DstPeer, key.DstMAC)
+}
 
-		log.Println(parts...)
-	}
+type nopPacketLogging struct{}
+
+func (nopPacketLogging) LogPacket(string, weave.PacketKey) {
+}
+
+func (nopPacketLogging) LogForwardPacket(string, weave.ForwardPacketKey) {
 }
 
 func parseAndCheckCIDR(cidrStr string) address.CIDR {
