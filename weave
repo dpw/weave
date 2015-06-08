@@ -85,6 +85,7 @@ exec_remote() {
         -e WEAVE_PASSWORD \
         -e WEAVE_PORT \
         -e WEAVE_CONTAINER_NAME \
+        -e WEAVE_MTU \
         -e DOCKER_BRIDGE \
         -e DOCKER_CLIENT_HOST="$DOCKER_CLIENT_HOST" \
         -e DOCKER_CLIENT_TLS_VERIFY="$DOCKER_CLIENT_TLS_VERIFY" \
@@ -192,7 +193,6 @@ DOCKER_BRIDGE=${DOCKER_BRIDGE:-docker0}
 CONTAINER_NAME=${WEAVE_CONTAINER_NAME:-weave}
 BRIDGE=weave
 CONTAINER_IFNAME=ethwe
-MTU=65535
 PORT=${WEAVE_PORT:-6783}
 HTTP_PORT=6784
 PROXY_PORT=12375
@@ -201,6 +201,13 @@ COVERAGE_ARGS=""
 if [ -n "$COVERAGE" ] ; then
     COVERAGE_ARGS="-test.coverprofile=/home/weave/cover.prof --"
 fi
+
+# GCE has the lowest underlay network MTU we're likely to encounter on
+# a local network, at 1460 bytes.  To get the overlay MTU from that we
+# subtract 20 bytes for the outer IPv4 header, 8 bytes for the outer
+# UDP header, 8 bytes for the vxlan header, and 14 bytes for the inner
+# ethernet header.
+MTU=${WEAVE_MTU:-1410}
 
 ######################################################################
 # general helpers; independent of docker and weave
