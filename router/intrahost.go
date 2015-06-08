@@ -3,20 +3,18 @@ package router
 // Interface to intra-host packet handling
 type IntraHost interface {
 	// Inject a packet to be delivered locally
-	InjectPacket([]byte) error
+	InjectPacket(PacketKey) FlowOp
 
 	// Start consuming packets from the bridge
 	ConsumePackets(IntraHostConsumer) error
 }
 
-// A function that accepts locally captured packets.  The ethernet
-// decoder is specific to this thread, and will already have been used
-// to to decode the packet data.
-type IntraHostConsumer func([]byte, *EthernetDecoder)
+// A function that determines how to handle locally captured packets.
+type IntraHostConsumer func(PacketKey) FlowOp
 
 type NullIntraHost struct{}
 
-func (NullIntraHost) InjectPacket([]byte) error {
+func (NullIntraHost) InjectPacket(PacketKey) FlowOp {
 	return nil
 }
 
