@@ -68,7 +68,8 @@ type InterHostForwarder interface {
 	// Forward a packet across the connection.  The caller must
 	// supply an EthernetDecoder specific to this thread, which
 	// has already been used to decode the frame.
-	Forward(src *Peer, dest *Peer, frame []byte, dec *EthernetDecoder) error
+	Forward(src *Peer, dest *Peer, frame []byte, dec *EthernetDecoder,
+		broadcast bool)
 
 	Close()
 
@@ -98,8 +99,8 @@ func (NullInterHost) Features() []string {
 func (NullInterHost) SetListener(InterHostForwarderListener) {
 }
 
-func (NullInterHost) Forward(*Peer, *Peer, []byte, *EthernetDecoder) error {
-	return nil
+func (NullInterHost) Forward(*Peer, *Peer, []byte, *EthernetDecoder,
+	bool) {
 }
 
 func (NullInterHost) Close() {
