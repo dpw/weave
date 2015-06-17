@@ -11,6 +11,10 @@ type InterHost interface {
 
 	// Form a packet-forwarding connection.
 	MakeForwarder(ForwarderParams) (InterHostForwarder, error)
+
+	// The routes have changed, so any cached information should
+	// be discarded.
+	InvalidateRoutes()
 }
 
 type ForwarderParams struct {
@@ -79,6 +83,9 @@ func (NullInterHost) ConsumePackets(*Peer, *Peers, InterHostConsumer) error {
 
 func (NullInterHost) MakeForwarder(ForwarderParams) (InterHostForwarder, error) {
 	return NullInterHost{}, nil
+}
+
+func (NullInterHost) InvalidateRoutes() {
 }
 
 func (NullInterHost) SetListener(InterHostForwarderListener) {

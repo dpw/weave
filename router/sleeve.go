@@ -101,6 +101,10 @@ func (sleeve *SleeveInterHost) ConsumePackets(localPeer *Peer, peers *Peers,
 	return nil
 }
 
+func (*SleeveInterHost) InvalidateRoutes() {
+	// no cached information, so nothing to do
+}
+
 func (sleeve *SleeveInterHost) lookupForwarder(peer PeerName) *sleeveForwarder {
 	sleeve.lock.Lock()
 	defer sleeve.lock.Unlock()
