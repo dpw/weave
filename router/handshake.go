@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -45,7 +46,7 @@ func (fv *FieldValidator) Err() error {
 	return fv.err
 }
 
-func (conn *LocalConnection) handshake(acceptNewPeer bool) (*gob.Encoder, *gob.Decoder, error) {
+func (conn *LocalConnection) handshake(acceptNewPeer bool) (*gob.Decoder, []string, error) {
 	// We do not need to worry about locking in here as at this point
 	// the connection is not reachable by any go-routine other than
 	// ourself. Only when we add this connection to the conn.local
@@ -99,6 +100,11 @@ func (conn *LocalConnection) handshake(acceptNewPeer bool) (*gob.Encoder, *gob.D
 	}
 	conn.uid = localConnID ^ remoteConnID
 
+	interhost, err := fv.Value("InterHost")
+	if err != nil {
+		return nil, nil, err
+	}
+
 	remotePublicStr, rpErr := fv.Value("PublicKey")
 	if usingPassword {
 		if rpErr != nil {
@@ -121,7 +127,8 @@ func (conn *LocalConnection) handshake(acceptNewPeer bool) (*gob.Encoder, *gob.D
 		conn.tcpSender = NewSimpleTCPSender(enc)
 	}
 
-	return enc, dec, conn.setRemote(NewPeer(name, nickNameStr, uid, 0))
+	return dec, strings.Split(interhost, " "),
+		conn.setRemote(NewPeer(name, nickNameStr, uid, 0))
 }
 
 func (conn *LocalConnection) exchangeHandshake(localConnID uint64, usingPassword bool, enc *gob.Encoder, dec *gob.Decoder) (*FieldValidator, *[32]byte, error) {
@@ -130,7 +137,9 @@ func (conn *LocalConnection) exchangeHandshake(localConnID uint64, usingPassword
 		"Name":            conn.local.Name.String(),
 		"NickName":        conn.local.NickName,
 		"UID":             fmt.Sprint(conn.local.UID),
-		"ConnID":          fmt.Sprint(localConnID)}
+		"ConnID":          fmt.Sprint(localConnID),
+		"InterHost":       strings.Join(conn.Router.InterHost.Features(), " "),
+	}
 	handshakeRecv := map[string]string{}
 	var public, private *[32]byte
 	var err error
