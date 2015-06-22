@@ -174,7 +174,7 @@ func (conn *LocalConnection) run(actionChan <-chan ConnectionAction, finished ch
 
 	conn.TCPConn.SetLinger(0)
 
-	_, dec, err := conn.handshake(acceptNewPeer)
+	dec, ihFeatures, err := conn.handshake(acceptNewPeer)
 	if err != nil {
 		return
 	}
@@ -187,6 +187,7 @@ func (conn *LocalConnection) run(actionChan <-chan ConnectionAction, finished ch
 		RemoteAddr:         conn.remoteUDPAddr,
 		ConnUID:            conn.uid,
 		Crypto:             conn.forwarderCrypto(),
+		Features:           ihFeatures,
 		SendControlMessage: conn.sendInterHostControlMessage,
 	}
 	if conn.forwarder, err = conn.Router.InterHost.MakeForwarder(params); err != nil {
