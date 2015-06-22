@@ -54,6 +54,10 @@ func NewSleeveInterHost(localPort int) InterHost {
 	return &SleeveInterHost{localPort: localPort}
 }
 
+func (*SleeveInterHost) Features() []string {
+	return []string{"sleeve"}
+}
+
 func (sleeve *SleeveInterHost) ConsumePackets(localPeer *Peer, peers *Peers,
 	consumer InterHostConsumer) error {
 	localAddr, err := net.ResolveUDPAddr("udp4",
@@ -299,6 +303,10 @@ type specialFrame struct {
 
 func (sleeve *SleeveInterHost) MakeForwarder(
 	params ForwarderParams) (InterHostForwarder, error) {
+	if err := checkFeatures(params.Features); err != nil {
+		return nil, err
+	}
+
 	var crypto InterHostCrypto
 	if params.Crypto != nil {
 		crypto = *params.Crypto
@@ -344,6 +352,16 @@ func (sleeve *SleeveInterHost) MakeForwarder(
 	go fwd.run(aggChan, aggDFChan, specialChan, confirmedChan,
 		finishedChan)
 	return fwd, nil
+}
+
+func checkFeatures(features []string) error {
+	for _, f := range features {
+		if f == "sleeve" {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("unsupported IntraHost features (%v)", features)
 }
 
 func (fwd *sleeveForwarder) logFrom(sender *net.UDPAddr, args ...interface{}) {
