@@ -11,6 +11,10 @@ type InterHost interface {
 
 	// Form a packet-forwarding connection.
 	MakeForwarder(ForwarderParams) (InterHostForwarder, error)
+
+	// Feature identifiers to send during the handshake.
+	// Indentifiers must not contain whitespace.
+	Features() []string
 }
 
 type ForwarderParams struct {
@@ -31,6 +35,9 @@ type ForwarderParams struct {
 
 	// Crypto bits.  Nil if not encrypting
 	Crypto *InterHostCrypto
+
+	// Peer's feature identifiers
+	Features []string
 
 	// Function to send a control message to the counterpart
 	// forwarder.
@@ -82,6 +89,10 @@ func (NullInterHost) ConsumePackets(*Peer, *Peers, InterHostConsumer) error {
 
 func (NullInterHost) MakeForwarder(ForwarderParams) (InterHostForwarder, error) {
 	return NullInterHost{}, nil
+}
+
+func (NullInterHost) Features() []string {
+	return []string{}
 }
 
 func (NullInterHost) SetListener(InterHostForwarderListener) {

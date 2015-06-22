@@ -8,7 +8,7 @@ import (
 
 const (
 	Protocol                = "weave"
-	ProtocolVersion    byte = 1
+	ProtocolVersion    byte = 2
 	ProtocolMinVersion byte = ProtocolVersion
 )
 
