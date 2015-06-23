@@ -35,6 +35,7 @@ type Config struct {
 	PeerDiscovery bool
 	BufSz         int
 	LogFrame      LogFrameFunc
+	Bridge     Bridge
 }
 
 type Router struct {
@@ -50,21 +51,13 @@ type Router struct {
 	UDPListener     *net.UDPConn
 }
 
-type PacketSource interface {
-	ReadPacket() ([]byte, error)
-}
-
-type PacketSink interface {
-	WritePacket([]byte) error
-}
-
-type PacketSourceSink interface {
-	PacketSource
-	PacketSink
-}
-
 func NewRouter(config Config, name PeerName, nickName string) *Router {
 	router := &Router{Config: config, gossipChannels: make(GossipChannels)}
+
+	if router.Bridge == nil {
+		router.Bridge = NullBridge{}
+	}
+
 	onMacExpiry := func(mac net.HardwareAddr, peer *Peer) {
 		Log.Println("Expired MAC", mac, "at", peer)
 	}
@@ -86,21 +79,10 @@ func NewRouter(config Config, name PeerName, nickName string) *Router {
 // packets forwarded over UDP.  This is separate from NewRouter so
 // that gossipers can register before we start forming connections.
 func (router *Router) Start() {
-	// we need two pcap handles since they aren't thread-safe
-	var pio PacketSourceSink
-	var po PacketSink
-	var err error
-	if router.Iface != nil {
-		pio, err = NewPcapIO(router.Iface.Name, router.BufSz)
-		checkFatal(err)
-		po, err = NewPcapO(router.Iface.Name)
-		checkFatal(err)
-	}
-	router.UDPListener = router.listenUDP(router.Port, po)
+	Log.Println("Sniffing traffic on", router.Bridge)
+	checkFatal(router.Bridge.ConsumePackets(router.handleCapturedPacket))
+	router.UDPListener = router.listenUDP(router.Port)
 	router.listenTCP(router.Port)
-	if pio != nil {
-		router.sniff(pio)
-	}
 }
 
 func (router *Router) Stop() error {
@@ -117,7 +99,7 @@ func (router *Router) Status() string {
 	fmt.Fprintln(&buf, "Our name is", router.Ourself)
 	fmt.Fprintln(&buf, "Encryption", OnOff(router.UsingPassword()))
 	fmt.Fprintln(&buf, "Peer discovery", OnOff(router.PeerDiscovery))
-	fmt.Fprintln(&buf, "Sniffing traffic on", router.Iface)
+	fmt.Fprintln(&buf, "Sniffing traffic on", router.Bridge)
 	fmt.Fprintf(&buf, "MACs:\n%s", router.Macs)
 	fmt.Fprintf(&buf, "Peers:\n%s", router.Peers)
 	fmt.Fprintf(&buf, "Routes:\n%s", router.Routes)
@@ -125,26 +107,8 @@ func (router *Router) Status() string {
 	return buf.String()
 }
 
-func (router *Router) sniff(pio PacketSourceSink) {
-	Log.Println("Sniffing traffic on", router.Iface)
-
-	dec := NewEthernetDecoder()
-	mac := router.Iface.HardwareAddr
-	if router.Macs.Enter(mac, router.Ourself.Peer) {
-		Log.Println("Discovered our MAC", mac)
-	}
-	go func() {
-		for {
-			pkt, err := pio.ReadPacket()
-			checkFatal(err)
-			router.LogFrame("Sniffed", pkt, nil)
-			router.handleCapturedPacket(pkt, dec, pio)
-		}
-	}()
-}
-
-func (router *Router) handleCapturedPacket(frameData []byte, dec *EthernetDecoder, po PacketSink) {
-	dec.DecodeLayers(frameData)
+func (router *Router) handleCapturedPacket(frameData []byte, dec *EthernetDecoder) {
+	router.LogFrame("Sniffed", frameData, dec)
 	decodedLen := len(dec.decoded)
 	if decodedLen == 0 {
 		return
@@ -186,7 +150,7 @@ func (router *Router) handleCapturedPacket(frameData []byte, dec *EthernetDecode
 
 	err := router.Ourself.Forward(dstPeer, frameCopy, dec)
 	if ftbe, ok := err.(FrameTooBigError); ok {
-		err = dec.sendICMPFragNeeded(ftbe.EPMTU, po.WritePacket)
+		err = dec.sendICMPFragNeeded(ftbe.EPMTU, router.Bridge.InjectPacket)
 	}
 	checkWarn(err)
 }
@@ -220,7 +184,7 @@ func (router *Router) acceptTCP(tcpConn *net.TCPConn) {
 	StartLocalConnection(connRemote, tcpConn, nil, router, true)
 }
 
-func (router *Router) listenUDP(localPort int, po PacketSink) *net.UDPConn {
+func (router *Router) listenUDP(localPort int) *net.UDPConn {
 	localAddr, err := net.ResolveUDPAddr("udp4", fmt.Sprint(":", localPort))
 	checkFatal(err)
 	conn, err := net.ListenUDP("udp4", localAddr)
@@ -232,11 +196,11 @@ func (router *Router) listenUDP(localPort int, po PacketSink) *net.UDPConn {
 	// This one makes sure all packets we send out do not have DF set on them.
 	err = syscall.SetsockoptInt(fd, syscall.IPPROTO_IP, syscall.IP_MTU_DISCOVER, syscall.IP_PMTUDISC_DONT)
 	checkFatal(err)
-	go router.udpReader(conn, po)
+	go router.udpReader(conn)
 	return conn
 }
 
-func (router *Router) udpReader(conn *net.UDPConn, po PacketSink) {
+func (router *Router) udpReader(conn *net.UDPConn) {
 	defer conn.Close()
 	dec := NewEthernetDecoder()
 	buf := make([]byte, MaxUDPPacketSize)
@@ -262,7 +226,7 @@ func (router *Router) udpReader(conn *net.UDPConn, po PacketSink) {
 		if !ok {
 			continue
 		}
-		if err := relayConn.Decryptor.IterateFrames(packet, router.handleUDPPacketFunc(relayConn, dec, sender, po)); err != nil {
+		if err := relayConn.Decryptor.IterateFrames(packet, router.handleUDPPacketFunc(relayConn, dec, sender)); err != nil {
 			// Errors during UDP packet decoding / processing are
 			// non-fatal. One common cause is that we receive and
 			// attempt to decrypt a "stray" packet. This can actually
@@ -279,7 +243,7 @@ func (router *Router) udpReader(conn *net.UDPConn, po PacketSink) {
 	}
 }
 
-func (router *Router) handleUDPPacketFunc(relayConn *LocalConnection, dec *EthernetDecoder, sender *net.UDPAddr, po PacketSink) FrameConsumer {
+func (router *Router) handleUDPPacketFunc(relayConn *LocalConnection, dec *EthernetDecoder, sender *net.UDPAddr) FrameConsumer {
 	return func(srcNameByte, dstNameByte []byte, frame []byte) {
 		srcPeer := router.Peers.Fetch(PeerNameFromBin(srcNameByte))
 		dstPeer := router.Peers.Fetch(PeerNameFromBin(dstNameByte))
@@ -327,10 +291,9 @@ func (router *Router) handleUDPPacketFunc(relayConn *LocalConnection, dec *Ether
 		if router.Macs.Enter(srcMac, srcPeer) {
 			Log.Println("Discovered remote MAC", srcMac, "at", srcPeer)
 		}
-		if po != nil {
-			router.LogFrame("Injecting", frame, dec)
-			checkWarn(po.WritePacket(frame))
-		}
+
+		router.LogFrame("Injecting", frame, dec)
+		checkWarn(router.Bridge.InjectPacket(frame))
 
 		dstPeer, found := router.Macs.Lookup(dstMac)
 		if !found || dstPeer != router.Ourself.Peer {
