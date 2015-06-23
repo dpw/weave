@@ -18,7 +18,7 @@ func (router *Router) StatusJSON(version string) ([]byte, error) {
 		Peers         *Peers
 		Routes        *Routes
 		ConnectionMakerStatus
-	}{version, router.UsingPassword(), router.PeerDiscovery, router.Ourself.Name.String(), router.Ourself.NickName, fmt.Sprintf("%v", router.Iface), router.Macs, router.Peers, router.Routes, router.ConnectionMaker.Status()})
+	}{version, router.UsingPassword(), router.PeerDiscovery, router.Ourself.Name.String(), router.Ourself.NickName, fmt.Sprint(router.IntraHost), router.Macs, router.Peers, router.Routes, router.ConnectionMaker.Status()})
 }
 
 func (cache *MacCache) MarshalJSON() ([]byte, error) {
