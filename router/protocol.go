@@ -58,9 +58,7 @@ type ProtocolTag byte
 
 const (
 	ProtocolHeartbeat ProtocolTag = iota
-	ProtocolConnectionEstablished
-	ProtocolFragmentationReceived
-	ProtocolPMTUVerified
+	ProtocolInterHostControlMsg
 	ProtocolGossip
 	ProtocolGossipUnicast
 	ProtocolGossipBroadcast
