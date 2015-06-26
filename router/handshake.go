@@ -114,13 +114,11 @@ func (conn *LocalConnection) handshake(acceptNewPeer bool) (*gob.Encoder, *gob.D
 		}
 		conn.SessionKey = FormSessionKey(&remotePublic, private, conn.Router.Password)
 		conn.tcpSender = NewEncryptedTCPSender(enc, conn.SessionKey, conn.outbound)
-		conn.Decryptor = NewNaClDecryptor(conn.SessionKey, conn.outbound)
 	} else {
 		if rpErr == nil {
 			return nil, nil, fmt.Errorf("Remote network is encrypted. Password required.")
 		}
 		conn.tcpSender = NewSimpleTCPSender(enc)
-		conn.Decryptor = NewNonDecryptor()
 	}
 
 	return enc, dec, conn.setRemote(NewPeer(name, nickNameStr, uid, 0))
