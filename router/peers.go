@@ -131,13 +131,19 @@ func (peers *Peers) ApplyUpdate(update []byte) (PeerNameSet, PeerNameSet, error)
 	for _, peer := range decodedUpdate {
 		updateNames[peer.Name] = void
 	}
-	return updateNames, setFromPeersMap(newUpdate), nil
+
+	return updateNames, newUpdate, nil
 }
 
 func (peers *Peers) Names() PeerNameSet {
 	peers.RLock()
 	defer peers.RUnlock()
-	return setFromPeersMap(peers.table)
+
+	names := make(PeerNameSet)
+	for name := range peers.table {
+		names[name] = void
+	}
+	return names
 }
 
 func (peers *Peers) EncodePeers(names PeerNameSet) []byte {
@@ -207,14 +213,6 @@ func (peers *Peers) garbageCollect() []*Peer {
 	return removed
 }
 
-func setFromPeersMap(peers map[PeerName]*Peer) PeerNameSet {
-	names := make(PeerNameSet)
-	for name := range peers {
-		names[name] = void
-	}
-	return names
-}
-
 func (peers *Peers) decodeUpdate(update []byte) (newPeers map[PeerName]*Peer, decodedUpdate []*Peer, decodedConns [][]ConnectionSummary, err error) {
 	newPeers = make(map[PeerName]*Peer)
 	decodedUpdate = []*Peer{}
@@ -260,8 +258,8 @@ func (peers *Peers) decodeUpdate(update []byte) (newPeers map[PeerName]*Peer, de
 	return
 }
 
-func (peers *Peers) applyUpdate(decodedUpdate []*Peer, decodedConns [][]ConnectionSummary) map[PeerName]*Peer {
-	newUpdate := make(map[PeerName]*Peer)
+func (peers *Peers) applyUpdate(decodedUpdate []*Peer, decodedConns [][]ConnectionSummary) PeerNameSet {
+	newUpdate := make(PeerNameSet)
 	for idx, newPeer := range decodedUpdate {
 		connSummaries := decodedConns[idx]
 		name := newPeer.Name
@@ -286,7 +284,7 @@ func (peers *Peers) applyUpdate(decodedUpdate []*Peer, decodedConns [][]Connecti
 		// the router.Peers, so there can be no race here.
 		peer.Version = newPeer.Version
 		peer.connections = makeConnsMap(peer, connSummaries, peers.table)
-		newUpdate[name] = peer
+		newUpdate[name] = void
 	}
 	return newUpdate
 }
