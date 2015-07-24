@@ -19,7 +19,8 @@ type LocalPeerAction func()
 func NewLocalPeer(name PeerName, nickName string, router *Router) *LocalPeer {
 	actionChan := make(chan LocalPeerAction, ChannelSize)
 	peer := &LocalPeer{
-		Peer:       NewPeer(name, nickName, randomPeerUID(), 0),
+		Peer: NewPeer(name, nickName, randomPeerUID(), 0,
+			randomPeerShortID()),
 		router:     router,
 		actionChan: actionChan,
 	}
@@ -296,4 +297,11 @@ func (peer *LocalPeer) connectionCount() int {
 	peer.RLock()
 	defer peer.RUnlock()
 	return len(peer.connections)
+}
+
+func (peer *LocalPeer) setShortID(shortID PeerShortID) {
+	peer.Lock()
+	defer peer.Unlock()
+	peer.ShortID = shortID
+	peer.Version++
 }
