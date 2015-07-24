@@ -7,7 +7,7 @@ import (
 // Interface to overlay network packet handling
 type Overlay interface {
 	// Start consuming forwarded packets.
-	ConsumePackets(*Peer, *Peers, OverlayConsumer) error
+	ConsumeOverlayPackets(*Peer, *Peers, OverlayConsumer) error
 
 	// Form a packet-forwarding connection.
 	MakeForwarder(ForwarderParams) (OverlayForwarder, error)
@@ -80,7 +80,7 @@ type OverlayForwarderListener interface {
 
 type NullOverlay struct{}
 
-func (NullOverlay) ConsumePackets(*Peer, *Peers, OverlayConsumer) error {
+func (NullOverlay) ConsumeOverlayPackets(*Peer, *Peers, OverlayConsumer) error {
 	return nil
 }
 

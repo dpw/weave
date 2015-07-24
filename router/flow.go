@@ -34,8 +34,8 @@ type MultiFlowOp struct {
 	ops       []FlowOp
 }
 
-func NewMultiFlowOp(broadcast bool) *MultiFlowOp {
-	return &MultiFlowOp{broadcast: broadcast}
+func NewMultiFlowOp(broadcast bool, ops ...FlowOp) *MultiFlowOp {
+	return &MultiFlowOp{broadcast: broadcast, ops: ops}
 }
 
 func (mfop *MultiFlowOp) Add(ops ...FlowOp) {
@@ -45,6 +45,28 @@ func (mfop *MultiFlowOp) Add(ops ...FlowOp) {
 func (mfop *MultiFlowOp) Send(frame []byte, dec *EthernetDecoder,
 	broadcast bool) {
 	for _, op := range mfop.ops {
-		op.Send(frame, dec, mfop.broadcast)
+		if op != nil {
+			op.Send(frame, dec, mfop.broadcast)
+		}
 	}
+}
+
+func FlattenFlowOp(fop FlowOp) []FlowOp {
+	return collectFlowOps(nil, fop)
+}
+
+func collectFlowOps(into []FlowOp, fop FlowOp) []FlowOp {
+	if fop == nil {
+		return into
+	}
+
+	if mfop, ok := fop.(*MultiFlowOp); ok {
+		for _, op := range mfop.ops {
+			into = collectFlowOps(into, op)
+		}
+
+		return into
+	}
+
+	return append(into, fop)
 }

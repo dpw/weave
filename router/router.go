@@ -86,8 +86,8 @@ func NewRouter(config Config, name PeerName, nickName string) *Router {
 // that gossipers can register before we start forming connections.
 func (router *Router) Start() {
 	log.Println("Sniffing traffic on", router.Bridge)
-	checkFatal(router.Bridge.ConsumePackets(router.handleCapturedPacket))
-	checkFatal(router.Overlay.ConsumePackets(router.Ourself.Peer, router.Peers, router.handleForwardedPacket))
+	checkFatal(router.Bridge.ConsumeBridgePackets(router.handleCapturedPacket))
+	checkFatal(router.Overlay.ConsumeOverlayPackets(router.Ourself.Peer, router.Peers, router.handleForwardedPacket))
 	router.listenTCP(router.Port)
 }
 

@@ -6,7 +6,7 @@ type Bridge interface {
 	InjectPacket(PacketKey) FlowOp
 
 	// Start consuming packets from the bridge
-	ConsumePackets(BridgeConsumer) error
+	ConsumeBridgePackets(BridgeConsumer) error
 }
 
 // A function that determines how to handle locally captured packets.
@@ -18,7 +18,7 @@ func (NullBridge) InjectPacket(PacketKey) FlowOp {
 	return nil
 }
 
-func (NullBridge) ConsumePackets(BridgeConsumer) error {
+func (NullBridge) ConsumeBridgePackets(BridgeConsumer) error {
 	return nil
 }
 

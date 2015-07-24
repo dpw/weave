@@ -53,8 +53,8 @@ func NewSleeveOverlay(localPort int) Overlay {
 	return &SleeveOverlay{localPort: localPort}
 }
 
-func (sleeve *SleeveOverlay) ConsumePackets(localPeer *Peer, peers *Peers,
-	consumer OverlayConsumer) error {
+func (sleeve *SleeveOverlay) ConsumeOverlayPackets(localPeer *Peer,
+	peers *Peers, consumer OverlayConsumer) error {
 	localAddr, err := net.ResolveUDPAddr("udp4",
 		fmt.Sprint(":", sleeve.localPort))
 	if err != nil {

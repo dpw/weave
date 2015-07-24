@@ -13,6 +13,7 @@ import (
 	"github.com/davecheney/profile"
 	"github.com/docker/docker/pkg/mflag"
 	"github.com/gorilla/mux"
+	"github.com/weaveworks/go-odp/odp"
 
 	. "github.com/weaveworks/weave/common"
 	"github.com/weaveworks/weave/common/docker"
@@ -35,8 +36,13 @@ func main() {
 	runtime.GOMAXPROCS(procs)
 
 	var (
+		// flags that cause immediate exit
+		justVersion          bool
+		createDatapath       bool
+		deleteDatapath       bool
+		addDatapathInterface string
+
 		config             weave.Config
-		justVersion        bool
 		protocolMinVersion int
 		ifaceName          string
 		routerName         string
@@ -60,9 +66,14 @@ func main() {
 		dnsTTL             int
 		dnsClientTimeout   time.Duration
 		iface              *net.Interface
+		datapathName       string
 	)
 
 	mflag.BoolVar(&justVersion, []string{"#version", "-version"}, false, "print version and exit")
+	mflag.BoolVar(&createDatapath, []string{"-create-datapath"}, false, "create ODP datapath and exit")
+	mflag.BoolVar(&deleteDatapath, []string{"-delete-datapath"}, false, "delete ODP datapath and exit")
+	mflag.StringVar(&addDatapathInterface, []string{"-add-datapath-iface"}, "", "add a network interface to the ODP datapath and exit")
+
 	mflag.IntVar(&config.Port, []string{"#port", "-port"}, weave.Port, "router port")
 	mflag.IntVar(&protocolMinVersion, []string{"-min-protocol-version"}, weave.ProtocolMinVersion, "minimum weave protocol version")
 	mflag.StringVar(&ifaceName, []string{"#iface", "-iface"}, "", "name of interface to capture/inject from (disabled if blank)")
@@ -86,13 +97,36 @@ func main() {
 	mflag.StringVar(&dnsListenAddress, []string{"-dns-listen-address"}, nameserver.DefaultListenAddress, "address to listen on for DNS requests")
 	mflag.IntVar(&dnsTTL, []string{"-dns-ttl"}, nameserver.DefaultTTL, "TTL for DNS request from our domain")
 	mflag.DurationVar(&dnsClientTimeout, []string{"-dns-fallback-timeout"}, nameserver.DefaultClientTimeout, "timeout for fallback DNS requests")
+	mflag.StringVar(&datapathName, []string{"-datapath"}, "", "ODP datapath name")
 
 	mflag.Parse()
 	peers = mflag.Args()
 
 	SetLogLevel(logLevel)
-	if justVersion {
+
+	switch {
+	case justVersion:
 		fmt.Printf("weave router %s\n", version)
+		os.Exit(0)
+
+	case createDatapath:
+		err := weave.CreateDatapath(datapathName)
+		if odp.IsKernelLacksODPError(err) {
+			// When the kernel lacks ODP support, exit
+			// with a special status to distinguish it for
+			// the weave script.
+			os.Exit(17)
+		}
+
+		checkFatal(err)
+		os.Exit(0)
+
+	case deleteDatapath:
+		checkFatal(weave.DeleteDatapath(datapathName))
+		os.Exit(0)
+
+	case addDatapathInterface != "":
+		checkFatal(weave.AddDatapathInterface(datapathName, addDatapathInterface))
 		os.Exit(0)
 	}
 
@@ -106,13 +140,48 @@ func main() {
 
 	var err error
 
+	if datapathName != "" {
+		// If a datapath name is specified, then we start fast
+		// datapath in order to do bridging on the
+		// datapath. And it implies that intrahost and
+		// interhost packet handling use fast datapath,
+		// although other options can override that below.
+
+		fastdp, err := weave.NewFastDatapath(datapathName, config.Port)
+		checkFatal(err)
+		config.Bridge = fastdp
+		config.Overlay = fastdp
+	}
+
 	if ifaceName != "" {
+		// -iface can coexist with -datapath, because
+		// pcap-based packet capture is a bit more efficient
+		// than capture via ODP misses, even when using an
+		// ODP-based bridge.  So when using weave encyption,
+		// it's preferable to use -iface.
 		iface, err := weavenet.EnsureInterface(ifaceName, wait)
 		checkFatal(err)
 
 		// bufsz flag is in MB
 		config.Bridge, err = weave.NewPcap(iface, bufSzMB*1024*1024)
 		checkFatal(err)
+	}
+
+	if password == "" {
+		password = os.Getenv("WEAVE_PASSWORD")
+	}
+
+	if password == "" {
+		Log.Println("Communication between peers is unencrypted.")
+	} else {
+		config.Password = []byte(password)
+		Log.Println("Communication between peers is encrypted.")
+		config.Overlay = nil
+	}
+
+	if config.Overlay == nil {
+		// -datapath was not specified, or -password was speficied
+		config.Overlay = weave.NewSleeveOverlay(config.Port)
 	}
 
 	if routerName == "" {
@@ -130,16 +199,6 @@ func main() {
 		checkFatal(err)
 	}
 
-	if password == "" {
-		password = os.Getenv("WEAVE_PASSWORD")
-	}
-	if password == "" {
-		Log.Println("Communication between peers is unencrypted.")
-	} else {
-		config.Password = []byte(password)
-		Log.Println("Communication between peers is encrypted.")
-	}
-
 	if prof != "" {
 		p := *profile.CPUProfile
 		p.ProfilePath = prof
@@ -148,7 +207,6 @@ func main() {
 	}
 
 	config.PeerDiscovery = !noDiscovery
-	config.Overlay = weave.NewSleeveOverlay(config.Port)
 
 	if pktdebug {
 		config.PacketLogging = packetLogging{}
