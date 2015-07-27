@@ -15,6 +15,9 @@ type Peers struct {
 	byName    map[PeerName]*Peer
 	byShortID map[PeerShortID]ShortIDPeers
 	onGC      []func(*Peer)
+
+	// Called when the mapping from short ids to peers changes
+	onInvalidatedShortIDs []func()
 }
 
 type ShortIDPeers struct {
@@ -74,8 +77,17 @@ func (peers *Peers) OnGC(callback func(*Peer)) {
 	peers.onGC = append(peers.onGC, callback)
 }
 
+func (peers *Peers) OnInvalidatedShortIDs(callback func()) {
+	peers.Lock()
+	defer peers.Unlock()
+
+	// Safe, as in OnGC
+	peers.onInvalidatedShortIDs = append(peers.onInvalidatedShortIDs, callback)
+}
+
 func (peers *Peers) unlockAndNotify(pending *PeersPendingNotifications) {
 	onGC := peers.onGC
+	onInvalidatedShortIDs := peers.onInvalidatedShortIDs
 	peers.Unlock()
 
 	if pending.removed != nil {
@@ -87,10 +99,8 @@ func (peers *Peers) unlockAndNotify(pending *PeersPendingNotifications) {
 	}
 
 	if pending.invalidatedShortIDs {
-		//  Some tests have a nil router
-		router := peers.ourself.router
-		if router != nil {
-			router.Overlay.InvalidateShortIDs()
+		for _, callback := range onInvalidatedShortIDs {
+			callback()
 		}
 	}
 }
