@@ -53,7 +53,11 @@ type PeersPendingNotifications struct {
 	// Peers that have been GCed
 	removed []*Peer
 
+	// The mapping from shorts ids to peers changed
 	invalidatedShortIDs bool
+
+	// The local short ID needs reassigning due to a collision
+	reassignLocalShortID bool
 }
 
 func NewPeers(ourself *LocalPeer) *Peers {
@@ -86,6 +90,7 @@ func (peers *Peers) OnInvalidatedShortIDs(callback func()) {
 }
 
 func (peers *Peers) unlockAndNotify(pending *PeersPendingNotifications) {
+	broadcastLocalPeer := pending.reassignLocalShortID && peers.reassignLocalShortID(pending)
 	onGC := peers.onGC
 	onInvalidatedShortIDs := peers.onInvalidatedShortIDs
 	peers.Unlock()
@@ -103,10 +108,13 @@ func (peers *Peers) unlockAndNotify(pending *PeersPendingNotifications) {
 			callback()
 		}
 	}
+
+	if broadcastLocalPeer {
+		peers.ourself.broadcastPeerUpdate()
+	}
 }
 
 func (peers *Peers) addByShortID(peer *Peer, pending *PeersPendingNotifications) {
-	reassign := false
 	entry, ok := peers.byShortID[peer.ShortID]
 	if !ok {
 		entry = ShortIDPeers{peer: peer}
@@ -124,7 +132,7 @@ func (peers *Peers) addByShortID(peer *Peer, pending *PeersPendingNotifications)
 		if entry.peer == peers.ourself.Peer {
 			// The bumped peer is peers.ourself, so we
 			// need to look foor a new short id
-			reassign = true
+			pending.reassignLocalShortID = true
 		}
 
 		entry.others = append(entry.others, entry.peer)
@@ -136,10 +144,6 @@ func (peers *Peers) addByShortID(peer *Peer, pending *PeersPendingNotifications)
 	}
 
 	peers.byShortID[peer.ShortID] = entry
-
-	if reassign {
-		peers.reassignLocalShortID(pending)
-	}
 }
 
 func (peers *Peers) deleteByShortID(peer *Peer, pending *PeersPendingNotifications) {
@@ -189,13 +193,15 @@ func (peers *Peers) deleteByShortID(peer *Peer, pending *PeersPendingNotificatio
 	peers.byShortID[peer.ShortID] = entry
 }
 
-func (peers *Peers) reassignLocalShortID(pending *PeersPendingNotifications) {
+func (peers *Peers) reassignLocalShortID(pending *PeersPendingNotifications) bool {
 	newShortID, ok := peers.chooseShortID()
 	if ok {
 		peers.setLocalShortID(newShortID, pending)
+		return true
 	}
 
 	// Otherwise we'll try again later on in garbageColleect
+	return false
 }
 
 func (peers *Peers) setLocalShortID(newShortID PeerShortID, pending *PeersPendingNotifications) {
@@ -430,7 +436,7 @@ func (peers *Peers) garbageCollect(pending *PeersPendingNotifications) {
 		// The local peer doesn't own its short id.  Garbage
 		// collection might have freed some up, so try to
 		// reassign.
-		peers.reassignLocalShortID(pending)
+		pending.reassignLocalShortID = true
 	}
 }
 
