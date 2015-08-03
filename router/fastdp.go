@@ -464,6 +464,10 @@ func (fastdp *FastDatapath) InvalidateShortIDs() {
 	checkWarn(fastdp.clearFlows())
 }
 
+func (*FastDatapath) AddFeaturesTo(features map[string]string) {
+	features["FastDatapath"] = ""
+}
+
 func (fastdp *FastDatapath) extractPeers(tunnelID [8]byte) (*Peer, *Peer) {
 	if fastdp.peers == nil {
 		return nil, nil

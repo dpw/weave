@@ -18,6 +18,9 @@ type Overlay interface {
 
 	// A mapping of a short id to a peer has changed
 	InvalidateShortIDs()
+
+	// Enhance a features map with overlay-related features
+	AddFeaturesTo(map[string]string)
 }
 
 type ForwarderParams struct {
@@ -42,6 +45,9 @@ type ForwarderParams struct {
 	// Function to send a control message to the counterpart
 	// forwarder.
 	SendControlMessage func([]byte) error
+
+	// Features passed at connection initiation
+	Features map[string]string
 }
 
 // When a consumer is called, the decoder will already have been used
@@ -92,6 +98,9 @@ func (NullOverlay) InvalidateRoutes() {
 }
 
 func (NullOverlay) InvalidateShortIDs() {
+}
+
+func (NullOverlay) AddFeaturesTo(map[string]string) {
 }
 
 func (NullOverlay) SetListener(OverlayForwarderListener) {

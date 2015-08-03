@@ -108,6 +108,10 @@ func (*SleeveOverlay) InvalidateShortIDs() {
 	// no cached information, so nothing to do
 }
 
+func (*SleeveOverlay) AddFeaturesTo(map[string]string) {
+	// No features to be provided, to facilitate compatibility
+}
+
 func (sleeve *SleeveOverlay) lookupForwarder(peer PeerName) *sleeveForwarder {
 	sleeve.lock.Lock()
 	defer sleeve.lock.Unlock()
