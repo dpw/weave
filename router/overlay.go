@@ -1,6 +1,7 @@
 package router
 
 import (
+	"fmt"
 	"net"
 )
 
@@ -9,7 +10,9 @@ type Overlay interface {
 	// Start consuming forwarded packets.
 	ConsumeOverlayPackets(*Peer, *Peers, OverlayConsumer) error
 
-	// Form a packet-forwarding connection.
+	// Form a packet-forwarding connection.  Can return a
+	// UnsupportedOverlayError to indicate that this overlay is
+	// not applicable in this case.
 	MakeForwarder(ForwarderParams) (OverlayForwarder, error)
 
 	// The routes have changed, so any cached information should
@@ -21,6 +24,14 @@ type Overlay interface {
 
 	// Enhance a features map with overlay-related features
 	AddFeaturesTo(map[string]string)
+}
+
+type UnsupportedOverlayError struct {
+	Type string
+}
+
+func (e UnsupportedOverlayError) Error() string {
+	return fmt.Sprintf("Overlay type \"%s\" not supported for this connection", e.Type)
 }
 
 type ForwarderParams struct {
