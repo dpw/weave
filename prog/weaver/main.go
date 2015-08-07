@@ -180,7 +180,7 @@ func main() {
 	}
 
 	if config.Overlay == nil {
-		// -datapath was not specified, or -password was speficied
+		// -datapath was not specified, or -password was specified
 		config.Overlay = weave.NewSleeveOverlay(config.Port)
 	}
 
