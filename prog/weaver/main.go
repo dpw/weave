@@ -67,6 +67,7 @@ func main() {
 		dnsClientTimeout   time.Duration
 		iface              *net.Interface
 		datapathName       string
+		vxlanPort          int
 	)
 
 	mflag.BoolVar(&justVersion, []string{"#version", "-version"}, false, "print version and exit")
@@ -98,6 +99,7 @@ func main() {
 	mflag.IntVar(&dnsTTL, []string{"-dns-ttl"}, nameserver.DefaultTTL, "TTL for DNS request from our domain")
 	mflag.DurationVar(&dnsClientTimeout, []string{"-dns-fallback-timeout"}, nameserver.DefaultClientTimeout, "timeout for fallback DNS requests")
 	mflag.StringVar(&datapathName, []string{"-datapath"}, "", "ODP datapath name")
+	mflag.IntVar(&vxlanPort, []string{"-vxlan-port"}, -1, "router vxlan port")
 
 	mflag.Parse()
 	peers = mflag.Args()
@@ -142,12 +144,16 @@ func main() {
 	config.Overlay = sleeve
 
 	if datapathName != "" {
-		// If a datapath name is specified, then we start fast
-		// datapath in order to do bridging. And it implies
-		// that "Bridge" and "Overlay" packet handling use
-		// fast datapath, although other options can override
-		// that below.
-		fastdp, err := weave.NewFastDatapath(datapathName, config.Port+1)
+		if vxlanPort == -1 {
+			vxlanPort = config.Port + 1
+		}
+
+		// A datapath name implies that "Bridge" and "Overlay"
+		// packet handling use fast datapath, although other
+		// options can override that below.  Even if both
+		// things are overridden, we might need bridging on
+		// the datapath.
+		fastdp, err := weave.NewFastDatapath(datapathName, vxlanPort)
 		checkFatal(err)
 		config.Bridge = fastdp
 		config.Overlay = weave.NewOverlaySwitch(fastdp, sleeve)
