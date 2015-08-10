@@ -160,7 +160,7 @@ func (fastdp *FastDatapath) Error(err error, stopped bool) {
 
 func (fastdp *FastDatapath) Miss(packet []byte, fks odp.FlowKeys) error {
 	ingress := fks[odp.OVS_KEY_ATTR_IN_PORT].(odp.InPortFlowKey).VportID()
-	log.Println("Got miss", fks, "on port", ingress)
+	log.Debug("Got ODP miss", fks, "on port", ingress)
 
 	fastdp.lock.Lock()
 	defer fastdp.lock.Unlock()
@@ -215,7 +215,7 @@ func (fastdp *FastDatapath) send(fops FlowOp, frame []byte) {
 	}
 
 	if createFlow {
-		log.Println("Creating flow", flow)
+		log.Debug("Creating ODP flow", flow)
 		checkWarn(fastdp.dp.CreateFlow(flow))
 	}
 }
