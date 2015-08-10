@@ -493,6 +493,10 @@ type FastDatapathForwarder struct {
 
 func (fastdp *FastDatapath) MakeForwarder(
 	params ForwarderParams) (OverlayForwarder, error) {
+	if _, present := params.Features["FastDatapath"]; !present {
+		return nil, UnsupportedOverlayError{"fast datapath"}
+	}
+
 	if len(params.LocalIP) != 4 {
 		return nil, fmt.Errorf("local IP address %s is not IPv4",
 			params.LocalIP)

@@ -138,19 +138,19 @@ func main() {
 	}
 	config.ProtocolMinVersion = byte(protocolMinVersion)
 
-	var err error
+	sleeve := weave.NewSleeveOverlay(config.Port)
+	config.Overlay = sleeve
 
 	if datapathName != "" {
 		// If a datapath name is specified, then we start fast
-		// datapath in order to do bridging on the
-		// datapath. And it implies that intrahost and
-		// interhost packet handling use fast datapath,
-		// although other options can override that below.
-
-		fastdp, err := weave.NewFastDatapath(datapathName, config.Port)
+		// datapath in order to do bridging. And it implies
+		// that "Bridge" and "Overlay" packet handling use
+		// fast datapath, although other options can override
+		// that below.
+		fastdp, err := weave.NewFastDatapath(datapathName, config.Port+1)
 		checkFatal(err)
 		config.Bridge = fastdp
-		config.Overlay = fastdp
+		config.Overlay = weave.NewOverlaySwitch(fastdp, sleeve)
 	}
 
 	if ifaceName != "" {
@@ -176,12 +176,9 @@ func main() {
 	} else {
 		config.Password = []byte(password)
 		Log.Println("Communication between peers is encrypted.")
-		config.Overlay = nil
-	}
 
-	if config.Overlay == nil {
-		// -datapath was not specified, or -password was specified
-		config.Overlay = weave.NewSleeveOverlay(config.Port)
+		// We need to use the sleeve overlay for encryption
+		config.Overlay = sleeve
 	}
 
 	if routerName == "" {
