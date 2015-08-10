@@ -602,7 +602,7 @@ loop:
 
 		case _, ok := <-confirmedChan:
 			if !ok {
-				// specialChan is closed to indicate
+				// confirmedChan is closed to indicate
 				// the forwarder is being closed
 				break loop
 			}
@@ -772,7 +772,7 @@ func (fwd *sleeveForwarder) confirmed() error {
 	// heartbeatInterval flags that we want to send heartbeats,
 	// even if we don't do sendHeartbeat() yet due to lacking the
 	// remote address.
-	fwd.heartbeatInterval = time.Duration(FastHeartbeat)
+	fwd.heartbeatInterval = FastHeartbeat
 	if fwd.remoteAddr != nil {
 		if err := fwd.sendHeartbeat(); err != nil {
 			return err
@@ -805,7 +805,7 @@ func (fwd *sleeveForwarder) handleHeartbeat(special specialFrame) error {
 
 	if fwd.remoteAddr == nil {
 		fwd.setRemoteAddr(special.sender)
-		if fwd.heartbeatInterval != time.Duration(0) {
+		if fwd.heartbeatInterval != 0 {
 			if err := fwd.sendHeartbeat(); err != nil {
 				return err
 			}
