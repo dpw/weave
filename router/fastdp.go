@@ -568,10 +568,6 @@ func (fwd *FastDatapathForwarder) confirmed() {
 	}
 
 	fwd.heartbeatInterval = FastHeartbeat
-	if fwd.remoteAddr != nil {
-		fwd.handleError(fwd.sendHeartbeat())
-	}
-
 	fwd.heartbeatTimeout = time.NewTimer(HeartbeatTimeout)
 	go fwd.doHeartbeats()
 
@@ -588,6 +584,34 @@ func (fwd *FastDatapathForwarder) confirmed() {
 	// thread: waits for timer, waits for timeout, waits for
 	// "close" indication.
 
+}
+
+func (fwd *FastDatapathForwarder) doHeartbeats() {
+	var err error
+
+	if fwd.remoteAddr != nil {
+		// send the initial heartbeat
+		err = fwd.sendHeartbeat()
+	}
+
+	for err == nil {
+		select {
+		case <-timerChan(fwd.heartbeatTimer):
+			err = fwd.sendHeartbeat()
+
+		case <-fwd.heartbeatTimeout.C:
+			err = fmt.Errorf("timed out waiting for vxlan heartbeat")
+
+		case <-fwd.stopChan:
+			return
+		}
+	}
+
+	fwd.lock.RLock()
+	defer fwd.lock.RUnlock()
+	if fwd.listener != nil {
+		fwd.listener.Error(err)
+	}
 }
 
 func (fwd *FastDatapathForwarder) sendHeartbeat() error {
@@ -648,28 +672,6 @@ func (fwd *FastDatapathForwarder) handleError(err error) {
 	default:
 	}
 
-	if fwd.listener != nil {
-		fwd.listener.Error(err)
-	}
-}
-
-func (fwd *FastDatapathForwarder) doHeartbeats() {
-	var err error
-	for err == nil {
-		select {
-		case <-timerChan(fwd.heartbeatTimer):
-			err = fwd.sendHeartbeat()
-
-		case <-fwd.heartbeatTimeout.C:
-			err = fmt.Errorf("timed out waiting for vxlan heartbeat")
-
-		case <-fwd.stopChan:
-			return
-		}
-	}
-
-	fwd.lock.RLock()
-	defer fwd.lock.RUnlock()
 	if fwd.listener != nil {
 		fwd.listener.Error(err)
 	}
