@@ -36,7 +36,8 @@ type bridgePortID struct {
 
 var routerPortID = bridgePortID{router: true}
 
-type bridgeSender func(key PacketKey) FlowOp
+type bridgeSender func(key PacketKey, lock *fastDatapathLock) FlowOp
+type missHandler func(fks odp.FlowKeys, lock *fastDatapathLock) FlowOp
 
 type FastDatapath struct {
 	dpname string
@@ -46,7 +47,8 @@ type FastDatapath struct {
 	lock            sync.Mutex
 	dpif            *odp.Dpif
 	dp              odp.DatapathHandle
-	missHandlers    map[odp.VportID]func(odp.FlowKeys) FlowOp
+	clearFlowsCount uint64
+	missHandlers    map[odp.VportID]missHandler
 	vxlanVportID    odp.VportID
 	localPeer       *Peer
 	peers           *Peers
@@ -57,7 +59,8 @@ type FastDatapath struct {
 	// How to send to a given destination MAC
 	sendToMAC map[MAC]bridgeSender
 
-	// Only accessed from Miss, so not locked
+	// A singleton pool for the occasions when we need to decode
+	// the packet.
 	dec *EthernetDecoder
 }
 
@@ -83,10 +86,9 @@ func NewFastDatapath(dpname string, vxlanUDPPort int) (*FastDatapath, error) {
 		dpname:       dpname,
 		dpif:         dpif,
 		dp:           dp,
-		missHandlers: make(map[odp.VportID]func(odp.FlowKeys) FlowOp),
+		missHandlers: make(map[odp.VportID]missHandler),
 		sendToPort:   nil,
 		sendToMAC:    make(map[MAC]bridgeSender),
-		dec:          NewEthernetDecoder(),
 	}
 
 	if err := fastdp.deleteVxlanVports(); err != nil {
@@ -121,7 +123,38 @@ func (fastdp *FastDatapath) Close() error {
 	return err
 }
 
+type fastDatapathLock struct {
+	fastdp          *FastDatapath
+	locked          bool
+	clearFlowsCount uint64
+}
+
+func (fastdp *FastDatapath) startLock() fastDatapathLock {
+	fastdp.lock.Lock()
+	return fastDatapathLock{
+		fastdp:          fastdp,
+		locked:          true,
+		clearFlowsCount: fastdp.clearFlowsCount,
+	}
+}
+
+func (lock *fastDatapathLock) unlock() {
+	if lock.locked {
+		lock.fastdp.lock.Unlock()
+		lock.locked = false
+	}
+}
+
+func (lock *fastDatapathLock) relock() {
+	if !lock.locked {
+		lock.fastdp.lock.Lock()
+		lock.locked = true
+	}
+}
+
 func (fastdp *FastDatapath) clearFlows() error {
+	fastdp.clearFlowsCount++
+
 	flows, err := fastdp.dp.EnumerateFlows()
 	if err != nil {
 		return err
@@ -166,8 +199,8 @@ func (fastdp *FastDatapath) Miss(packet []byte, fks odp.FlowKeys) error {
 	ingress := fks[odp.OVS_KEY_ATTR_IN_PORT].(odp.InPortFlowKey).VportID()
 	log.Debug("Got ODP miss", fks, "on port", ingress)
 
-	fastdp.lock.Lock()
-	defer fastdp.lock.Unlock()
+	lock := fastdp.startLock()
+	defer lock.unlock()
 
 	// missHandlers is a cache indexed by the ingress vport
 	handler := fastdp.missHandlers[ingress]
@@ -180,12 +213,13 @@ func (fastdp *FastDatapath) Miss(packet []byte, fks odp.FlowKeys) error {
 		fastdp.missHandlers[ingress] = handler
 	}
 
-	fastdp.send(handler(fks), packet)
+	fastdp.send(handler(fks, &lock), packet, &lock)
 	return nil
 }
 
 // Send a packet, creating a corresponding ODP flow rule if possible
-func (fastdp *FastDatapath) send(fops FlowOp, frame []byte) {
+func (fastdp *FastDatapath) send(fops FlowOp, frame []byte,
+	lock *fastDatapathLock) {
 	// Gather the actions from actionFlowOps, execute any others
 	var dec *EthernetDecoder
 	flow := odp.NewFlowSpec()
@@ -203,25 +237,54 @@ func (fastdp *FastDatapath) send(fops FlowOp, frame []byte) {
 			// A foreign flow op, so send the packet the
 			// normal way, decoding the packet lazily.
 			if dec == nil {
-				dec = fastdp.dec
+				dec = fastdp.takeDecoder(lock)
 				dec.DecodeLayers(frame)
 				createFlow = false
 			}
 
 			if len(dec.decoded) != 0 {
+				// drop the lock while calling the
+				// foreign Send function
+				lock.unlock()
 				fop.Send(frame, dec, false)
 			}
 		}
 	}
 
+	if dec != nil {
+		// put the decoder back
+		lock.relock()
+		fastdp.dec = dec
+	}
+
 	if len(flow.Actions) != 0 {
+		lock.relock()
 		checkWarn(fastdp.dp.Execute(frame, nil, flow.Actions))
 	}
 
 	if createFlow {
-		log.Debug("Creating ODP flow", flow)
-		checkWarn(fastdp.dp.CreateFlow(flow))
+		lock.relock()
+		// if the fastdp's clearFlowsCount changed since we
+		// initially locked it, then we might have created a
+		// flow on the basis of stale information.  Ift's fine
+		// to handle one packet like that, but it would be bad
+		// to introduce a stale flow.
+		if lock.clearFlowsCount != fastdp.clearFlowsCount {
+			log.Debug("Creating ODP flow", flow)
+			checkWarn(fastdp.dp.CreateFlow(flow))
+		}
 	}
+}
+
+func (fastdp *FastDatapath) takeDecoder(lock *fastDatapathLock) *EthernetDecoder {
+	lock.relock()
+	dec := fastdp.dec
+	if dec == nil {
+		dec = NewEthernetDecoder()
+	} else {
+		fastdp.dec = nil
+	}
+	return dec
 }
 
 type odpActionsFlowOp struct {
@@ -291,26 +354,24 @@ func (fastdp *FastDatapath) ConsumeBridgePackets(
 		return fmt.Errorf("FastDatapath already has a BridgeConsumer")
 	}
 
-	fastdp.addSendToPort(routerPortID, func(key PacketKey) FlowOp {
-		// We are dropping the FastDatapath lock while we call
-		// the consumer.  Callers have to be prepared for
-		// this.
-		fastdp.lock.Unlock()
-		defer fastdp.lock.Lock()
-		return consumer(key)
-	})
-
+	fastdp.addSendToPort(routerPortID,
+		func(key PacketKey, lock *fastDatapathLock) FlowOp {
+			// drop the FastDatapath lock in order to call
+			// the consumer
+			lock.unlock()
+			return consumer(key)
+		})
 	return nil
 }
 
 func (fastdp *FastDatapath) InjectPacket(key PacketKey) FlowOp {
-	fastdp.lock.Lock()
-	defer fastdp.lock.Unlock()
-	return fastdp.bridge(routerPortID, key)
+	lock := fastdp.startLock()
+	defer lock.unlock()
+	return fastdp.bridge(routerPortID, key, &lock)
 }
 
 func (fastdp *FastDatapath) makeBridgeMissHandler(
-	ingress odp.VportID) func(odp.FlowKeys) FlowOp {
+	ingress odp.VportID) missHandler {
 	// Set up a bridge port for netdev and internal vports.  vxlan
 	// vports are handled differently (we set up the handler for
 	// the main vxlan vport in ConsumeOverlayPackets).
@@ -328,7 +389,7 @@ func (fastdp *FastDatapath) makeBridgeMissHandler(
 
 	// Sending to the bridge port outputs on the vport:
 	fastdp.addSendToPort(bridgePortID{vport: ingress},
-		func(key PacketKey) FlowOp {
+		func(_ PacketKey, _ *fastDatapathLock) FlowOp {
 			return fastdp.odpActions(odp.NewOutputAction(ingress))
 		})
 
@@ -337,9 +398,9 @@ func (fastdp *FastDatapath) makeBridgeMissHandler(
 	checkWarn(fastdp.clearFlows())
 
 	// Packets coming from the netdev are processed by the bridge
-	return func(flowKeys odp.FlowKeys) FlowOp {
+	return func(flowKeys odp.FlowKeys, lock *fastDatapathLock) FlowOp {
 		return fastdp.bridge(bridgePortID{vport: ingress},
-			flowKeysToPacketKey(flowKeys))
+			flowKeysToPacketKey(flowKeys), lock)
 	}
 }
 
@@ -361,7 +422,8 @@ func flowKeysToPacketKey(fks odp.FlowKeys) PacketKey {
 
 // A simple bridge implementation
 func (fastdp *FastDatapath) bridge(ingress bridgePortID,
-	key PacketKey) FlowOp {
+	key PacketKey, lock *fastDatapathLock) FlowOp {
+	lock.relock()
 	if fastdp.sendToMAC[key.SrcMAC] == nil {
 		// Learn the source MAC
 		fastdp.sendToMAC[key.SrcMAC] = fastdp.sendToPort[ingress]
@@ -371,7 +433,7 @@ func (fastdp *FastDatapath) bridge(ingress bridgePortID,
 	// associated port.
 	if sender := fastdp.sendToMAC[key.DstMAC]; sender != nil {
 		return NewMultiFlowOp(false, odpEthernetFlowKey(key),
-			sender(key))
+			sender(key, lock))
 	}
 
 	// Otherwise, it might be a real broadcast, or it might
@@ -399,10 +461,10 @@ func (fastdp *FastDatapath) bridge(ingress bridgePortID,
 	// Send to all ports except the one it came in on. The
 	// sendToPort map is immutable, so it is safe to iterate over
 	// it even though the sender functions can drop the
-	// FastDataPath lock.
+	// fastDatapathLock
 	for id, sender := range fastdp.sendToPort {
 		if id != ingress {
-			mfop.Add(sender(key))
+			mfop.Add(sender(key, lock))
 		}
 	}
 
@@ -423,7 +485,8 @@ func (fastdp *FastDatapath) ConsumeOverlayPackets(
 	fastdp.localPeer = localPeer
 	fastdp.peers = peers
 
-	fastdp.missHandlers[fastdp.vxlanVportID] = func(fks odp.FlowKeys) FlowOp {
+	handler := func(fks odp.FlowKeys, lock *fastDatapathLock) FlowOp {
+		lock.unlock()
 		tunnel := fks[odp.OVS_KEY_ATTR_TUNNEL].(odp.TunnelFlowKey).Key()
 		srcPeer, dstPeer := fastdp.extractPeers(tunnel.TunnelId)
 		if srcPeer == nil || dstPeer == nil {
@@ -446,14 +509,11 @@ func (fastdp *FastDatapath) ConsumeOverlayPackets(
 		tunnelFlowKey.SetIpv4Src(tunnel.Ipv4Src)
 		tunnelFlowKey.SetIpv4Dst(tunnel.Ipv4Dst)
 
-		// We drop the FastDatapath lock while we call the
-		// consumer.  Callers have to be prepared for this.
-		fastdp.lock.Unlock()
-		defer fastdp.lock.Lock()
 		return NewMultiFlowOp(false, odpFlowKey(tunnelFlowKey),
 			consumer(key))
 	}
 
+	fastdp.missHandlers[fastdp.vxlanVportID] = handler
 	return nil
 }
 
