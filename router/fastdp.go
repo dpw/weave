@@ -62,6 +62,9 @@ type FastDatapath struct {
 	// A singleton pool for the occasions when we need to decode
 	// the packet.
 	dec *EthernetDecoder
+
+	// forwarders by remote peer
+	forwarders map[PeerName]*FastDatapathForwarder
 }
 
 func NewFastDatapath(dpname string, vxlanUDPPort int) (*FastDatapath, error) {
@@ -89,6 +92,7 @@ func NewFastDatapath(dpname string, vxlanUDPPort int) (*FastDatapath, error) {
 		missHandlers: make(map[odp.VportID]missHandler),
 		sendToPort:   nil,
 		sendToMAC:    make(map[MAC]bridgeSender),
+		forwarders:   make(map[PeerName]*FastDatapathForwarder),
 	}
 
 	if err := fastdp.deleteVxlanVports(); err != nil {
@@ -149,6 +153,25 @@ func (lock *fastDatapathLock) relock() {
 	if !lock.locked {
 		lock.fastdp.lock.Lock()
 		lock.locked = true
+	}
+}
+
+func (fastdp *FastDatapath) addForwarder(peer PeerName,
+	fwd *FastDatapathForwarder) {
+	fastdp.lock.Lock()
+	defer fastdp.lock.Unlock()
+
+	// We shouldn't have two confirmed forwarders to the same
+	// remotePeer, due to the checks in LocalPeer AddConnection.
+	fastdp.forwarders[peer] = fwd
+}
+
+func (fastdp *FastDatapath) removeForwarder(peer PeerName,
+	fwd *FastDatapathForwarder) {
+	fastdp.lock.Lock()
+	defer fastdp.lock.Unlock()
+	if fastdp.forwarders[peer] == fwd {
+		delete(fastdp.forwarders, peer)
 	}
 }
 
@@ -493,13 +516,16 @@ func (fastdp *FastDatapath) ConsumeOverlayPackets(
 			return vetoFlowCreationFlowOp{}
 		}
 
-		// XXX identify special frames, hand it to the
-		// forwarder, return flow veto.
+		pk := flowKeysToPacketKey(fks)
+		var zeroMAC MAC
+		if pk.SrcMAC == zeroMAC && pk.DstMAC == zeroMAC {
+			return fastdp.handleVxlanSpecialPacket(srcPeer)
+		}
 
 		key := ForwardPacketKey{
 			SrcPeer:   srcPeer,
 			DstPeer:   dstPeer,
-			PacketKey: flowKeysToPacketKey(fks),
+			PacketKey: pk,
 		}
 
 		// The resulting flow rule should be restricted to
@@ -514,6 +540,10 @@ func (fastdp *FastDatapath) ConsumeOverlayPackets(
 	}
 
 	fastdp.missHandlers[fastdp.vxlanVportID] = handler
+	return nil
+}
+
+func (fastdp *FastDatapath) handleVxlanSpecialPacket(_ *Peer) FlowOp {
 	return nil
 }
 
@@ -620,12 +650,13 @@ func (fwd *FastDatapathForwarder) logPrefix() string {
 func (fwd *FastDatapathForwarder) confirmed() {
 	fwd.lock.Lock()
 	defer fwd.lock.Unlock()
-	log.Debug(fwd.logPrefix(), "confirmed")
-
 	if fwd.heartbeatInterval != 0 {
 		// already confirmed
 		return
 	}
+
+	log.Debug(fwd.logPrefix(), "confirmed")
+	fwd.fastdp.addForwarder(fwd.remotePeer.Name, fwd)
 
 	fwd.heartbeatInterval = FastHeartbeat
 	fwd.heartbeatTimeout = time.NewTimer(HeartbeatTimeout)
@@ -794,7 +825,7 @@ func tunnelIDFor(key ForwardPacketKey) (tunnelID [8]byte) {
 }
 
 func (fwd *FastDatapathForwarder) Close() {
-	// Ideally we would delete all the relevant flows here.  But
-	// until we do that, it's probably not worth clearing all
-	// flows.
+	// Might be nice to delete all the relevant flows here, but we
+	// can just left them expire.
+	fwd.fastdp.removeForwarder(fwd.remotePeer.Name, fwd)
 }
