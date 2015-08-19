@@ -7,8 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
 	"github.com/weaveworks/go-odp/odp"
 )
 
@@ -122,6 +120,8 @@ func (fastdp *FastDatapath) String() string {
 }
 
 func (fastdp *FastDatapath) Close() error {
+	fastdp.lock.Lock()
+	defer fastdp.lock.Unlock()
 	err := fastdp.dpif.Close()
 	fastdp.dpif = nil
 	return err
@@ -215,12 +215,12 @@ func (fastdp *FastDatapath) deleteVxlanVports() error {
 
 func (fastdp *FastDatapath) Error(err error, stopped bool) {
 	// XXX fatal if stopped
-	log.Println("Error while listening on datapath:", err)
+	log.Error("Error while listening on datapath: ", err)
 }
 
 func (fastdp *FastDatapath) Miss(packet []byte, fks odp.FlowKeys) error {
 	ingress := fks[odp.OVS_KEY_ATTR_IN_PORT].(odp.InPortFlowKey).VportID()
-	log.Debug("Got ODP miss", fks, "on port", ingress)
+	log.Debug("Got ODP miss ", fks, " on port ", ingress)
 
 	lock := fastdp.startLock()
 	defer lock.unlock()
@@ -293,7 +293,7 @@ func (fastdp *FastDatapath) send(fops FlowOp, frame []byte,
 		// to handle one packet like that, but it would be bad
 		// to introduce a stale flow.
 		if lock.clearFlowsCount != fastdp.clearFlowsCount {
-			log.Debug("Creating ODP flow", flow)
+			log.Debug("Creating ODP flow ", flow)
 			checkWarn(fastdp.dp.CreateFlow(flow))
 		}
 	}
@@ -401,7 +401,7 @@ func (fastdp *FastDatapath) makeBridgeMissHandler(
 
 	vport, err := fastdp.dp.LookupVport(ingress)
 	if err != nil {
-		log.Println(err)
+		log.Error(err)
 		return nil
 	}
 
@@ -519,7 +519,8 @@ func (fastdp *FastDatapath) ConsumeOverlayPackets(
 		pk := flowKeysToPacketKey(fks)
 		var zeroMAC MAC
 		if pk.SrcMAC == zeroMAC && pk.DstMAC == zeroMAC {
-			return fastdp.handleVxlanSpecialPacket(srcPeer)
+			return vxlanSpecialPacketFlowOp{fastdp, srcPeer,
+				tunnel.Ipv4Src}
 		}
 
 		key := ForwardPacketKey{
@@ -543,19 +544,37 @@ func (fastdp *FastDatapath) ConsumeOverlayPackets(
 	return nil
 }
 
-func (fastdp *FastDatapath) handleVxlanSpecialPacket(_ *Peer) FlowOp {
-	return nil
+type vxlanSpecialPacketFlowOp struct {
+	fastdp  *FastDatapath
+	srcPeer *Peer
+	ipv4Src [4]byte
+}
+
+func (op vxlanSpecialPacketFlowOp) Send(frame []byte, dec *EthernetDecoder,
+	broadcast bool) {
+	op.fastdp.lock.Lock()
+	fwd := op.fastdp.forwarders[op.srcPeer.Name]
+	op.fastdp.lock.Unlock()
+
+	if !dec.IsSpecial() {
+		// A surprising case, as we already know the packet is
+		// to/from the all-zeroes MAC address from the flow
+		// key.
+		return
+	}
+
+	fwd.handleVxlanSpecialPacket(frame, op.ipv4Src)
 }
 
 func (fastdp *FastDatapath) InvalidateRoutes() {
-	fmt.Println("InvalidateRoutes")
+	log.Debug("InvalidateRoutes")
 	fastdp.lock.Lock()
 	defer fastdp.lock.Unlock()
 	checkWarn(fastdp.clearFlows())
 }
 
 func (fastdp *FastDatapath) InvalidateShortIDs() {
-	fmt.Println("InvalidateShortIDs")
+	log.Debug("InvalidateShortIDs")
 	fastdp.lock.Lock()
 	defer fastdp.lock.Unlock()
 	checkWarn(fastdp.clearFlows())
@@ -584,13 +603,18 @@ type FastDatapathForwarder struct {
 	connUID        uint64
 
 	lock              sync.RWMutex
-	listener          OverlayForwarderListener
-	remoteAddr        *net.UDPAddr
+	confirmed         bool
 	remoteIP          [4]byte
+	haveRemoteIP      bool
 	heartbeatInterval time.Duration
 	heartbeatTimer    *time.Timer
 	heartbeatTimeout  *time.Timer
+	ackedHeartbeat    bool
 	stopChan          chan struct{}
+	stopped           bool
+
+	establishedChan chan struct{}
+	errorChan       chan error
 }
 
 func (fastdp *FastDatapath) MakeForwarder(
@@ -610,23 +634,42 @@ func (fastdp *FastDatapath) MakeForwarder(
 		localIP:        localIP,
 		sendControlMsg: params.SendControlMessage,
 		connUID:        params.ConnUID,
-		remoteAddr:     params.RemoteAddr,
+
+		heartbeatInterval: FastHeartbeat,
+		stopChan:          make(chan struct{}),
+
+		establishedChan: make(chan struct{}),
+		errorChan:       make(chan error, 1),
 	}
 
-	if fwd.remoteAddr != nil {
-		fwd.remoteIP, err = ipv4Bytes(fwd.remoteAddr.IP)
+	if params.RemoteAddr != nil {
+		fwd.haveRemoteIP = true
+		fwd.remoteIP, err = ipv4Bytes(params.RemoteAddr.IP)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return fwd, err
 }
 
 func ipv4Bytes(ip net.IP) (res [4]byte, err error) {
-	if len(ip) == 4 {
-		copy(res[:], ip)
+	ipv4 := ip.To4()
+	if ipv4 != nil {
+		copy(res[:], ipv4)
 	} else {
 		err = fmt.Errorf("IP address %s is not IPv4", ip)
 	}
 	return
+}
+
+func (fwd *FastDatapathForwarder) logPrefix() string {
+	var ip net.IP
+	if fwd.haveRemoteIP {
+		ip = net.IP(fwd.remoteIP[:])
+	}
+
+	return fmt.Sprintf("->[%s|%s]: ", ip, fwd.remotePeer)
 }
 
 func (fwd *FastDatapathForwarder) SetListener(
@@ -638,27 +681,41 @@ func (fwd *FastDatapathForwarder) SetListener(
 		panic("nil listener")
 	}
 
-	fwd.listener = listener
-	fwd.confirmed()
-}
-
-func (fwd *FastDatapathForwarder) logPrefix() string {
-	//XXX
-	return "XXX"
-}
-
-func (fwd *FastDatapathForwarder) confirmed() {
-	fwd.lock.Lock()
-	defer fwd.lock.Unlock()
-	if fwd.heartbeatInterval != 0 {
-		// already confirmed
-		return
+	if fwd.confirmed {
+		panic("already confirmed")
 	}
+
+	go func() {
+		select {
+		case <-fwd.establishedChan:
+			listener.Established()
+
+		case <-fwd.stopChan:
+		}
+	}()
+	go func() {
+		select {
+		case err := <-fwd.errorChan:
+			if err != nil {
+				listener.Error(err)
+			}
+
+		case <-fwd.stopChan:
+		}
+	}()
 
 	log.Debug(fwd.logPrefix(), "confirmed")
 	fwd.fastdp.addForwarder(fwd.remotePeer.Name, fwd)
+	fwd.confirmed = true
 
-	fwd.heartbeatInterval = FastHeartbeat
+	if fwd.haveRemoteIP {
+		// have the goroutnie send a heartbeat straight away
+		fwd.heartbeatTimer = time.NewTimer(0)
+	} else {
+		// we'll reset the timer when we learn the remote ip
+		fwd.heartbeatTimer = time.NewTimer(time.Hour * 24 * 365)
+	}
+
 	fwd.heartbeatTimeout = time.NewTimer(HeartbeatTimeout)
 	go fwd.doHeartbeats()
 
@@ -674,21 +731,18 @@ func (fwd *FastDatapathForwarder) confirmed() {
 
 	// thread: waits for timer, waits for timeout, waits for
 	// "close" indication.
-
 }
 
 func (fwd *FastDatapathForwarder) doHeartbeats() {
 	var err error
 
-	if fwd.remoteAddr != nil {
-		// send the initial heartbeat
-		err = fwd.sendHeartbeat()
-	}
-
 	for err == nil {
 		select {
-		case <-timerChan(fwd.heartbeatTimer):
-			err = fwd.sendHeartbeat()
+		case <-fwd.heartbeatTimer.C:
+			if fwd.confirmed {
+				fwd.sendHeartbeat()
+			}
+			fwd.heartbeatTimer.Reset(fwd.heartbeatInterval)
 
 		case <-fwd.heartbeatTimeout.C:
 			err = fmt.Errorf("timed out waiting for vxlan heartbeat")
@@ -698,56 +752,25 @@ func (fwd *FastDatapathForwarder) doHeartbeats() {
 		}
 	}
 
-	fwd.lock.RLock()
-	defer fwd.lock.RUnlock()
-	if fwd.listener != nil {
-		fwd.listener.Error(err)
-	}
+	fwd.lock.Lock()
+	defer fwd.lock.Unlock()
+	fwd.handleError(err)
 }
 
-func (fwd *FastDatapathForwarder) sendHeartbeat() error {
+func (fwd *FastDatapathForwarder) sendHeartbeat() {
+	fwd.lock.RLock()
 	log.Debug(fwd.logPrefix(), "sendHeartbeat")
-
-	heartbeat, err := fwd.makeHeartbeatPacket()
-	if err != nil {
-		return err
-	}
-
+	var buf [EthernetOverhead + 8]byte
+	binary.BigEndian.PutUint64(buf[EthernetOverhead:], fwd.connUID)
 	dec := NewEthernetDecoder()
-	dec.DecodeLayers(heartbeat)
-	fwd.Forward(ForwardPacketKey{
+	dec.DecodeLayers(buf[:])
+	pk := ForwardPacketKey{
 		PacketKey: dec.PacketKey(),
 		SrcPeer:   fwd.fastdp.localPeer,
 		DstPeer:   fwd.remotePeer,
-	}).Send(heartbeat, dec, false)
-
-	// Prime the timer for the next heartbeat.  We don't use a
-	// ticker because the interval is not constant.
-	if fwd.heartbeatTimer == nil {
-		fwd.heartbeatTimer = time.NewTimer(fwd.heartbeatInterval)
-	} else {
-		fwd.heartbeatTimer.Reset(fwd.heartbeatInterval)
 	}
-
-	return nil
-}
-
-func (fwd *FastDatapathForwarder) makeHeartbeatPacket() ([]byte, error) {
-	buf := gopacket.NewSerializeBuffer()
-	opts := gopacket.SerializeOptions{
-		FixLengths:       true,
-		ComputeChecksums: true,
-	}
-	var payload [8]byte
-	binary.BigEndian.PutUint64(payload[:], fwd.connUID)
-	err := gopacket.SerializeLayers(buf, opts,
-		&layers.Ethernet{Length: 8},
-		gopacket.Payload(payload[:]))
-	if err != nil {
-		return nil, err
-	}
-
-	return buf.Bytes(), nil
+	fwd.lock.RUnlock()
+	fwd.Forward(pk).Send(buf[:], dec, false)
 }
 
 // Handle an error which leads to notifying the listener and
@@ -757,14 +780,46 @@ func (fwd *FastDatapathForwarder) handleError(err error) {
 		return
 	}
 
-	// stop the heartbeat goroutine
 	select {
-	case fwd.stopChan <- struct{}{}:
+	case fwd.errorChan <- err:
 	default:
 	}
 
-	if fwd.listener != nil {
-		fwd.listener.Error(err)
+	// stop the heartbeat goroutine
+	if !fwd.stopped {
+		fwd.stopped = true
+		close(fwd.stopChan)
+	}
+}
+
+func (fwd *FastDatapathForwarder) handleVxlanSpecialPacket(frame []byte,
+	ipv4Src [4]byte) {
+	fwd.lock.Lock()
+	defer fwd.lock.Unlock()
+
+	uid := binary.BigEndian.Uint64(frame[EthernetOverhead:])
+	if uid != fwd.connUID {
+		return
+	}
+
+	log.Debug(fwd.logPrefix(), "handleHeartbeat")
+
+	if !fwd.haveRemoteIP {
+		fwd.remoteIP = ipv4Src
+		fwd.haveRemoteIP = true
+
+		if fwd.confirmed {
+			fwd.heartbeatTimer.Reset(0)
+		}
+	} else if fwd.remoteIP != ipv4Src {
+		log.Info(fwd.logPrefix(),
+			"Peer IP address changed to", net.IP(ipv4Src[:]))
+		fwd.remoteIP = ipv4Src
+	}
+
+	if !fwd.ackedHeartbeat {
+		fwd.ackedHeartbeat = true
+		fwd.handleError(fwd.sendControlMsg([]byte{HeartbeatAck}))
 	}
 }
 
@@ -772,30 +827,38 @@ func (fwd *FastDatapathForwarder) ControlMessage(msg []byte) {
 	fwd.lock.Lock()
 	defer fwd.lock.Unlock()
 
-	if len(msg) != 4 {
-		if fwd.listener != nil {
-			fwd.listener.Error(fmt.Errorf("FastDatapath control message wrong length %d", len(msg)))
-			fwd.listener = nil
-		}
-
-		return
+	if len(msg) == 0 {
+		log.Info(fwd.logPrefix(),
+			"Received zero-length control message")
 	}
 
-	// XXX remote addr is acquired from recieved heartbeats
-	//if !fwd.haveRemoteIP {
-	//copy(fwd.remoteIP[:], msg)
-	//		fwd.haveRemoteIP = true
-	//		if fwd.listener != nil {
-	//			fwd.listener.Established()
-	//		}
-	//}
+	switch msg[0] {
+	case HeartbeatAck:
+		fwd.handleHeartbeatAck()
+
+	default:
+		log.Info(fwd.logPrefix(),
+			"Ignoring unknown control message:", msg[0])
+	}
+}
+
+func (fwd *FastDatapathForwarder) handleHeartbeatAck() {
+	log.Debug(fwd.logPrefix(), "handleHeartbeat")
+
+	if fwd.heartbeatInterval != SlowHeartbeat {
+		close(fwd.establishedChan)
+		fwd.heartbeatInterval = SlowHeartbeat
+		if fwd.heartbeatTimer != nil {
+			fwd.heartbeatTimer.Reset(fwd.heartbeatInterval)
+		}
+	}
 }
 
 func (fwd *FastDatapathForwarder) Forward(key ForwardPacketKey) FlowOp {
 	fwd.lock.RLock()
 	defer fwd.lock.RUnlock()
 
-	if fwd.remoteAddr == nil {
+	if !fwd.haveRemoteIP {
 		// Just returning nil would indicate that that the
 		// packet is discarded.  But that would result in a
 		// flow rule, which we would have to invalidate when
@@ -826,6 +889,10 @@ func tunnelIDFor(key ForwardPacketKey) (tunnelID [8]byte) {
 
 func (fwd *FastDatapathForwarder) Close() {
 	// Might be nice to delete all the relevant flows here, but we
-	// can just left them expire.
+	// can just lett them expire.
 	fwd.fastdp.removeForwarder(fwd.remotePeer.Name, fwd)
+
+	fwd.lock.Lock()
+	defer fwd.lock.Unlock()
+	fwd.sendControlMsg = func([]byte) error { return nil }
 }
