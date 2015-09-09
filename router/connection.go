@@ -199,6 +199,7 @@ func (conn *LocalConnection) run(actionChan <-chan ConnectionAction, finished ch
 		ConnUID:            conn.uid,
 		Crypto:             conn.forwarderCrypto(),
 		SendControlMessage: conn.sendOverlayControlMessage,
+		Features:           intro.Features,
 	}
 	if conn.forwarder, err = conn.Router.Overlay.MakeForwarder(params); err != nil {
 		return
@@ -247,7 +248,7 @@ func (conn *LocalConnection) run(actionChan <-chan ConnectionAction, finished ch
 }
 
 func (conn *LocalConnection) makeFeatures() map[string]string {
-	return map[string]string{
+	features := map[string]string{
 		"PeerNameFlavour": PeerNameFlavour,
 		"Name":            conn.local.Name.String(),
 		"NickName":        conn.local.NickName,
@@ -255,6 +256,8 @@ func (conn *LocalConnection) makeFeatures() map[string]string {
 		"UID":             fmt.Sprint(conn.local.UID),
 		"ConnID":          fmt.Sprint(conn.uid),
 	}
+	conn.Router.Overlay.AddFeaturesTo(features)
+	return features
 }
 
 type features map[string]string
