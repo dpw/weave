@@ -700,8 +700,7 @@ func (fwd *fastDatapathForwarder) Forward(key ForwardPacketKey) FlowOp {
 	sta.SetTtl(64)
 	sta.SetDf(true)
 	sta.SetCsum(false)
-	return fwd.fastdp.odpActions(sta,
-		odp.NewOutputAction(fwd.fastdp.mainVxlanVportID))
+	return fwd.fastdp.odpActions(sta, odp.NewOutputAction(fwd.vxlanVportID))
 }
 
 func tunnelIDFor(key ForwardPacketKey) (tunnelID [8]byte) {
