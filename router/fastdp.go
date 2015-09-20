@@ -831,7 +831,7 @@ func (fastdp *FastDatapath) expireFlows() {
 			err = fastdp.dp.DeleteFlow(flow.FlowKeys)
 		} else {
 			fastdp.touchFlow(flow.FlowKeys, &lock)
-			err = fastdp.dp.ClearFlow(flow.FlowKeys)
+			err = fastdp.dp.ClearFlow(flow.FlowSpec)
 		}
 
 		if err != nil && !odp.IsNoSuchFlowError(err) {
